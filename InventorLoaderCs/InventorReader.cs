@@ -13,49 +13,117 @@ namespace InventorLoaderCs
 
         private SegmentReader CreateReaderForSegment(string segmentName, RSeSegment segment)
         {
-            if (segmentName.Equals("RSeDb", StringComparison.OrdinalIgnoreCase)) return new RSeDbReader(segment);
-            if (segmentName.Equals("UFRxDoc", StringComparison.OrdinalIgnoreCase)) return new UFRxDocReader(segment);
-            if (segmentName.Equals("AmBREPSegmentType", StringComparison.OrdinalIgnoreCase)) return new BRepReader(segment);
-            if (segmentName.Equals("PmDcSegmentType", StringComparison.OrdinalIgnoreCase)) return new DCReader(segment);
-            if (segmentName.Equals("AmAppSegmentType", StringComparison.OrdinalIgnoreCase)) return new AppReader(segment);
-            if (segmentName.Equals("EeSceneDynSegmentType", StringComparison.OrdinalIgnoreCase)) return new EeSceneReader(segment);
-            if (segmentName.Equals("GraphicsSeg", StringComparison.OrdinalIgnoreCase)) return new GraphicsReader(segment);
+            string typeKey = GetSegmentTypeFromName(segmentName);
 
-            Logger.Warning($"InventorReader.CreateReaderForSegment: No specific reader for segment '{segmentName}'. Using generic SegmentReader.");
+            if (KnownSegmentTypeToReaderMap.TryGetValue(typeKey, out Type readerType))
+            {
+                try
+                {
+                    return (SegmentReader)Activator.CreateInstance(readerType, segment);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"InventorReader.CreateReaderForSegment: Error creating reader of type {readerType.Name} for segment '{segmentName}'. Exception: {ex.Message}");
+                }
+            }
+
+            Logger.Warning($"InventorReader.CreateReaderForSegment: No specific reader for segment type key '{typeKey}' (from name '{segmentName}'). Using generic SegmentReader.");
             return new SegmentReader(segment);
         }
 
-        private byte[] GetSimulatedOleStreamData(string streamName, StreamWriter logFile)
+        private static class ConceptualOleFileWrapper
         {
-            logFile?.WriteLine($"InventorReader.GetSimulatedOleStreamData: Providing data for stream '{streamName}'.");
+            private string _filePath;
+            private StreamWriter _logFile;
+            private List<string> _simulatedStreamNames = new List<string> {
+                "RSeDb", "UFRxDoc", "AmBREPSegmentType", "PmDcSegmentType",
+                "AmAppSegmentType", "GraphicsSeg", "EeSceneDynSegmentType",
+                "UnknownStreamExample123", "EmptyStreamExample"
+            };
+            private Dictionary<string, byte[]> _simulatedStreamData = new Dictionary<string, byte[]>();
 
-            if (streamName == "RSeDb")
+            // Static property to allow tests to override specific stream data
+            public static byte[] OverrideAmBRepStreamData { get; set; } = null;
+
+            public ConceptualOleFileWrapper(string filePath, StreamWriter logFile)
             {
-                logFile?.WriteLine("GetSimulatedOleStreamData: Returning placeholder RSeDb data. NOTE: RSeDbReader needs to handle this or use real data for directory parsing.");
-                return Encoding.UTF8.GetBytes("RSeDb_Stream_Placeholder:SegmentDirectoryInfoWouldBeHere_And_Other_Metadata");
-            }
-            else if (streamName == "UFRxDoc")
-            {
-                logFile?.WriteLine("GetSimulatedOleStreamData: Returning placeholder UFRxDoc data. NOTE: UFRxReader needs to handle this or use real data for version/file info.");
-                return Encoding.UTF8.GetBytes("UFRxDoc_Stream_Placeholder:ContainsVersion_Filename_GUIDs_etc");
-            }
-            else if (streamName == "AmBREPSegmentType")
-            {
-                 logFile?.WriteLine("GetSimulatedOleStreamData: Returning minimal ACIS text data for AmBREPSegmentType.");
-                 // Valid minimal ACIS text file for basic parsing by AcisReader
-                 string acisTextData = "26.0.0 1000 ACIS 26.0 NT\n1 1 0\nplaceholder-unit 1\nEnd-of-ACIS-History-Marker-\nbody $ -1 $-1 $-1 $-1 $-1 $-1 $-1 $-1\nend\nEnd-of-ACIS-data\n";
-                 return Encoding.ASCII.GetBytes(acisTextData);
-            }
-            else if (streamName == "PmDcSegmentType" || streamName == "AmAppSegmentType" ||
-                     streamName == "EeSceneDynSegmentType" || streamName == "GraphicsSeg")
-            {
-                logFile?.WriteLine($"GetSimulatedOleStreamData: Returning small dummy byte array for '{streamName}'.");
-                // Simple, identifiable non-empty byte array
-                return new byte[] { 0x11, 0x22, 0x33, 0x44, (byte)streamName.Length, (byte)(streamName.FirstOrDefault()-'A')};
+                _filePath = filePath;
+                _logFile = logFile;
+
+                _simulatedStreamData["RSeDb"] = Encoding.UTF8.GetBytes("RSeDb_Simulated_Content_v4:SegmentDirectoryInfo;UFRxDoc;AmBREPSegmentType;PmDcSegmentType;AmAppSegmentType;GraphicsSeg;EeSceneDynSegmentType");
+                _simulatedStreamData["UFRxDoc"] = Encoding.UTF8.GetBytes("UFRxDoc_Simulated_Content_v4:Version26.0;FileName=" + Path.GetFileName(filePath));
+                // Default AmBREPSegmentType data, can be overridden by OverrideAmBRepStreamData
+                _simulatedStreamData["AmBREPSegmentType"] = Encoding.ASCII.GetBytes("26.0.0 1000 ACIS 26.0 NT\n1 1 0\nplaceholder-unit 1\nEnd-of-ACIS-History-Marker-\nbody $ -1 $-1 $-1 $-1 $-1 $-1 $-1 $-1\nend\nEnd-of-ACIS-data\n");
+                _simulatedStreamData["PmDcSegmentType"] = new byte[] { 0xDC, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F };
+                _simulatedStreamData["AmAppSegmentType"] = new byte[] { 0xAA, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F };
+                _simulatedStreamData["GraphicsSeg"] = new byte[] { 0x60, 0x05, 0x10, 0x15, 0x20, 0x25, 0x30, 0x35, 0x40, 0x45, 0x50, 0x55, 0x60, 0x65, 0x70, 0x75 };
+                _simulatedStreamData["EeSceneDynSegmentType"] = new byte[] { 0xEE, 0x5C, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17 };
+                _simulatedStreamData["EmptyStreamExample"] = new byte[0];
             }
 
-            logFile?.WriteLine($"GetSimulatedOleStreamData: No specific dummy data for unknown stream '{streamName}'. Returning null.");
-            return null;
+            public bool TryOpen()
+            {
+                Logger.Info(_logFile, $"ConceptualOleFileWrapper: Simulating opening '{_filePath}'");
+                return true;
+            }
+
+            public List<string> GetStreamNames()
+            {
+                Logger.Info(_logFile, "ConceptualOleFileWrapper: Simulating getting stream names.");
+                return new List<string>(_simulatedStreamNames);
+            }
+
+            public byte[] TryReadStream(string streamName)
+            {
+                if (streamName == "AmBREPSegmentType" && OverrideAmBRepStreamData != null)
+                {
+                    Logger.Info(_logFile, $"ConceptualOleFileWrapper: Reading overridden stream '{streamName}', Length: {OverrideAmBRepStreamData.Length}.");
+                    return OverrideAmBRepStreamData;
+                }
+
+                if (_simulatedStreamData.TryGetValue(streamName, out byte[] data))
+                {
+                    Logger.Info(_logFile, $"ConceptualOleFileWrapper: Simulating reading stream '{streamName}', Length: {data.Length}.");
+                    return data;
+                }
+                if (_simulatedStreamNames.Contains(streamName)) {
+                     Logger.Warning(_logFile, $"ConceptualOleFileWrapper: Stream '{streamName}' is known but has no specific simulated data. Returning empty byte array.");
+                     return new byte[0];
+                }
+                Logger.Warning(_logFile, $"ConceptualOleFileWrapper: Stream '{streamName}' not found in known simulated streams. Returning null.");
+                return null;
+            }
+
+            public void Close()
+            {
+                Logger.Info(_logFile, $"ConceptualOleFileWrapper: Simulating closing '{_filePath}'.");
+            }
+        }
+
+        private static readonly Dictionary<string, Type> KnownSegmentTypeToReaderMap = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "RSeDb", typeof(RSeDbReader) },
+            { "UFRxDoc", typeof(UFRxDocReader) },
+            { "AmBREPSegmentType", typeof(BRepReader) },
+            { "DefaultBRep", typeof(BRepReader) },
+            { "PmDcSegmentType", typeof(DCReader) },
+            { "DesignConstraints", typeof(DCReader) },
+            { "AmAppSegmentType", typeof(AppReader) },
+            { "ApplicationData", typeof(AppReader) },
+            { "GraphicsSeg", typeof(GraphicsReader) },
+            { "EeSceneDynSegmentType", typeof(EeSceneReader) }
+        };
+
+        private string GetSegmentTypeFromName(string segmentName)
+        {
+            if (segmentName.Equals("RSeDb", StringComparison.OrdinalIgnoreCase)) return "RSeDb";
+            if (segmentName.Equals("UFRxDoc", StringComparison.OrdinalIgnoreCase)) return "UFRxDoc";
+            if (segmentName.Equals("AmBREPSegmentType", StringComparison.OrdinalIgnoreCase) || segmentName.Equals("DefaultBRep", StringComparison.OrdinalIgnoreCase)) return "AmBREPSegmentType";
+            if (segmentName.Equals("PmDcSegmentType", StringComparison.OrdinalIgnoreCase) || segmentName.Equals("DesignConstraints", StringComparison.OrdinalIgnoreCase)) return "PmDcSegmentType";
+            if (segmentName.Equals("AmAppSegmentType", StringComparison.OrdinalIgnoreCase) || segmentName.Equals("ApplicationData", StringComparison.OrdinalIgnoreCase)) return "AmAppSegmentType";
+            if (segmentName.Equals("GraphicsSeg", StringComparison.OrdinalIgnoreCase)) return "GraphicsSeg";
+            if (segmentName.Equals("EeSceneDynSegmentType", StringComparison.OrdinalIgnoreCase)) return "EeSceneDynSegmentType";
+            return segmentName;
         }
 
         public Inventor ReadFile(string filePath, StreamWriter logFile = null)
@@ -66,95 +134,83 @@ namespace InventorLoaderCs
 
             Dictionary<string, byte[]> segmentDataMap = new Dictionary<string, byte[]>();
 
-            // --- Simulate OLE Library Usage ---
-            // TODO: Replace this section with actual OLE library calls (e.g., OpenMcdf or similar)
-            // Conceptual OleFile oleFile = new OleFile(filePath);
-            // Conceptual List<string> streamNamesInFile = oleFile.RootStorage.GetStreamNames(); // This would be dynamic
-
-            List<string> streamsToAttempt = _primarySegmentNames.ToList();
-            streamsToAttempt.AddRange(new[] {
-                "AmBREPSegmentType", "PmDcSegmentType", "AmAppSegmentType",
-                "EeSceneDynSegmentType", "GraphicsSeg"
-                // Add other typical segment names that might be directly in root or found via RSeDb
-            });
-            streamsToAttempt = streamsToAttempt.Distinct().ToList();
-
-            logFile?.WriteLine($"InventorReader: Attempting to (simulated) read OLE streams from: {filePath}");
-            foreach (string streamName in streamsToAttempt)
+            var oleFile = new ConceptualOleFileWrapper(filePath, logFile);
+            if (!oleFile.TryOpen())
             {
-                // Conceptual: CFStream stream = oleFile.RootStorage.GetStream(streamName);
-                // Conceptual: if (stream != null) { byte[] data = stream.GetData(); segmentDataMap[streamName] = data; ... }
-                // SIMULATION for this subtask:
-                byte[] streamData = GetSimulatedOleStreamData(streamName, logFile);
-                if (streamData != null && streamData.Length > 0)
-                {
-                    segmentDataMap[streamName] = streamData;
-                    logFile?.WriteLine($"InventorReader: Successfully (simulated) read stream: {streamName}, Length: {streamData.Length}");
-                }
-                else
-                {
-                    logFile?.WriteLine($"InventorReader: Stream not found or empty (simulated): {streamName}");
-                }
-            }
-            // --- End of Simulated OLE Library Usage ---
-
-            // Process RSeDb first
-            if (segmentDataMap.TryGetValue("RSeDb", out byte[] rseDbData))
-            {
-                var rseDbSegment = new RSeSegment("RSeDb");
-                inventorModel.Segments["RSeDb"] = rseDbSegment;
-                if (inventorModel.RSeDb != null) // RSeDb is auto-created with Inventor model
-                {
-                    inventorModel.RSeDb.SegInfo = rseDbSegment.SegInfo;
-                }
-
-
-                var rseDbReader = new RSeDbReader(rseDbSegment);
-                PreScanNodes(rseDbSegment, rseDbData, logFile);
-                rseDbReader.ReadSegmentData(rseDbData, logFile);
-                logFile?.WriteLine("InventorReader: RSeDb segment processed.");
-                // In a real scenario, rseDbSegment.SegInfo.SegmentDirectory would now be populated
-                // and could be used to refine 'streamsToAttempt' or discover more segments.
-            }
-            else
-            {
-                logFile?.WriteLine("Error: RSeDb segment is critical and was not found. Essential metadata might be missing.");
-                // For robust parsing, one might return null or an incomplete model here.
-                // For simulation, we continue with the predefined list.
+                Logger.Error(logFile, $"Failed to open (simulated) OLE file: {filePath}");
+                return null;
             }
 
-            // Process other segments
-            foreach (string segmentName in streamsToAttempt)
+            List<string> segmentsToProcessOrdered = new List<string>();
+
+            try
             {
-                if (segmentName.Equals("RSeDb", StringComparison.OrdinalIgnoreCase) && inventorModel.Segments.ContainsKey("RSeDb"))
+                List<string> streamNamesInFile = oleFile.GetStreamNames();
+                Logger.Info(logFile, $"InventorReader: Streams available in (simulated) OLE: {string.Join(", ", streamNamesInFile)}");
+
+                foreach (string streamName in streamNamesInFile)
                 {
+                    byte[] data = oleFile.TryReadStream(streamName);
+                    if (data != null)
+                    {
+                        segmentDataMap[streamName] = data; // Store even if empty, to indicate presence
+                        Logger.Info(logFile, $"InventorReader: Successfully loaded data for stream: {streamName}, Length: {data.Length}");
+                    }
+                    else
+                    {
+                         Logger.Warning(logFile, $"InventorReader: Stream '{streamName}' (reported by GetStreamNames) was not found or failed to read by TryReadStream.");
+                    }
+                }
+
+                if (segmentDataMap.ContainsKey("RSeDb")) segmentsToProcessOrdered.Add("RSeDb");
+                if (segmentDataMap.ContainsKey("UFRxDoc")) segmentsToProcessOrdered.Add("UFRxDoc");
+
+                foreach(var streamName in segmentDataMap.Keys)
+                {
+                    if (!segmentsToProcessOrdered.Contains(streamName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        segmentsToProcessOrdered.Add(streamName);
+                    }
+                }
+                Logger.Info(logFile, $"InventorReader: Will attempt to process segments in order: {string.Join(", ", segmentsToProcessOrdered)}");
+            }
+            finally
+            {
+                oleFile.Close();
+                ConceptualOleFileWrapper.OverrideAmBRepStreamData = null; // Reset override after use
+            }
+
+            foreach(string segmentName in segmentsToProcessOrdered)
+            {
+                if (!segmentDataMap.TryGetValue(segmentName, out byte[] currentSegmentData))
+                {
+                    Logger.Error(logFile, $"Internal Error: Segment '{segmentName}' was in processing list but not in data map after OLE read phase.");
                     continue;
                 }
 
-                if (!segmentDataMap.TryGetValue(segmentName, out byte[] currentSegmentData) || currentSegmentData.Length == 0)
+                if (currentSegmentData.Length == 0 && !segmentName.Equals("EmptyStreamExample", StringComparison.OrdinalIgnoreCase) )
                 {
-                    // Logged during the OLE simulation phase
-                    continue;
+                     Logger.Warning(logFile, $"InventorReader: Segment '{segmentName}' is empty. Skipping processing by its reader unless it's an expected empty stream.");
+                     continue;
                 }
 
-                var segment = new RSeSegment(segmentName);
-                // TODO: Populate segment.Version based on UFRxDoc if available
-                // For now, UFRxDoc processing is basic.
-                if (segmentName.Equals("UFRxDoc", StringComparison.OrdinalIgnoreCase) && inventorModel.UFRxDoc != null)
-                {
-                     // UFRxReader should populate inventorModel.UFRxDoc.Header1.ParsedVersion
-                }
-
+                var segment = inventorModel.Segments.ContainsKey(segmentName) ? inventorModel.Segments[segmentName] : new RSeSegment(segmentName);
                 inventorModel.Segments[segmentName] = segment;
-                SegmentReader reader = CreateReaderForSegment(segmentName, segment);
 
+                if (segmentName.Equals("RSeDb", StringComparison.OrdinalIgnoreCase) && inventorModel.RSeDb != null)
+                {
+                     inventorModel.RSeDb.SegInfo = segment.SegInfo;
+                }
+                // TODO: Populate segment.Version from UFRxDoc after UFRxDoc is processed.
+                // This requires UFRxDoc to be processed early if its version info is needed by other readers.
+
+                SegmentReader reader = CreateReaderForSegment(segmentName, segment);
                 logFile?.WriteLine($"InventorReader: Processing segment '{segmentName}' with reader '{reader.GetType().Name}'.");
                 PreScanNodes(segment, currentSegmentData, logFile);
                 reader.ReadSegmentData(currentSegmentData, logFile);
             }
 
-            // Post-processing: Link iProperties
-             if (inventorModel.Segments.TryGetValue("AmAppSegmentType", out RSeSegment appSegment))
+            if (inventorModel.Segments.TryGetValue("AmAppSegmentType", out RSeSegment appSegment))
             {
                 if (appSegment.ParsedContent.TryGetValue("iPropertiesDictionary", out object props) &&
                     props is Dictionary<string, Dictionary<object, Tuple<string, object>>> typedProps)
@@ -164,7 +220,7 @@ namespace InventorLoaderCs
                 }
                 else
                 {
-                    logFile?.WriteLine("InventorReader: iPropertiesData not found or of incorrect type in AmAppSegmentType's ParsedContent.");
+                    logFile?.WriteLine("InventorReader: iPropertiesData ('iPropertiesDictionary') not found or of incorrect type in AmAppSegmentType's ParsedContent.");
                 }
             }
 
@@ -175,13 +231,6 @@ namespace InventorLoaderCs
         private void PreScanNodes(RSeSegment segment, byte[] segmentData, StreamWriter logFile)
         {
             logFile?.WriteLine($"InventorReader.PreScanNodes: Placeholder for segment '{segment.Name}'. Actual node scanning depends on segment type structure.");
-            // A more functional PreScanNodes would identify SecNode boundaries within segmentData
-            // and populate segment.Nodes. For now, individual readers must manage their own data parsing.
-            // Example for a segment known to have a single root SecNode:
-            // if (segmentData.Length > 0 && IsKnownSingleNodeSegment(segment.Name)) {
-            //    string nodeUid = GetUidForKnownSegment(segment.Name); // Hypothetical
-            //    segment.Nodes.Add(new SecNode(nodeUid, segmentData, 0, segmentData.Length));
-            // }
         }
     }
 }
