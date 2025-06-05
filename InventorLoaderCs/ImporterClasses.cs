@@ -474,40 +474,6 @@ namespace InventorLoaderCs
     }
 
 
-    public class RSeSegInformation
-    {
-        public string Text { get; set; }
-        public List<object> Vers { get; set; }
-        public object Date { get; set; }
-        public Uid? Uid { get; set; }
-        public List<object> Arr2 { get; set; }
-        public List<object> Arr3 { get; set; }
-        public ushort U16 { get; set; }
-        public string Text2 { get; set; }
-        public List<object> Arr4 { get; set; }
-        public Dictionary<object, object> Segments { get; set; }
-        public List<ushort> Val { get; set; }
-        public List<Uid> UidList1 { get; set; }
-        public List<Uid> UidList2 { get; set; }
-        public List<SegmentEntryInfo> SegmentDirectory { get; set; } // Added for RSeDbReader
-
-        public RSeSegInformation()
-        {
-            Text = string.Empty;
-            Vers = new List<object>();
-            Arr2 = new List<object>();
-            Arr3 = new List<object>();
-            Text2 = string.Empty;
-            Arr4 = new List<object>();
-            Segments = new Dictionary<object, object>();
-            Val = new List<ushort>();
-            UidList1 = new List<Uid>();
-            UidList2 = new List<Uid>();
-            SegmentDirectory = new List<SegmentEntryInfo>(); // Initialize
-        }
-    }
-
-
     public abstract class AbstractData
     {
         public Uid? Uid { get; set; }
