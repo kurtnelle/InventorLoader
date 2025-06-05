@@ -5,3 +5,7 @@
 _.png
 0???.sat
 .DS_Store
+
+# C# build artifacts
+*/bin
+*/obj
