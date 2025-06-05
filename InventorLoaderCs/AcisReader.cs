@@ -12,20 +12,43 @@ namespace InventorLoaderCs
     {
         public AcisHeader Header { get; private set; }
         public List<AcisRecord> RecordsList { get; private set; }
-        private Dictionary<int, AcisChunkEntityRef> _refChunks; // To resolve references after all records are read
+        private Dictionary<long, AcisChunkEntityRef> _refChunks; // Changed key to long for 64-bit indices
+        private List<AcisEntity> _subtypeEntities; // For entities like CurveInt subtypes
+        private bool _isSpaceClaimFormat = false;
+
 
         public AcisReader()
         {
             Header = new AcisHeader();
             RecordsList = new List<AcisRecord>();
-            _refChunks = new Dictionary<int, AcisChunkEntityRef>();
+            _refChunks = new Dictionary<long, AcisChunkEntityRef>();
+            _subtypeEntities = new List<AcisEntity>();
+        }
+
+        public void AddSubtypeEntity(AcisEntity entity)
+        {
+            if (entity != null)
+            {
+                _subtypeEntities.Add(entity);
+                // entity.IndexInSubtypeList = _subtypeEntities.Count - 1; // Entity should handle its own index if needed
+            }
+        }
+
+        public AcisEntity GetSubtypeEntity(int internalRef) // internalRef is 0-based index
+        {
+            if (internalRef >= 0 && internalRef < _subtypeEntities.Count)
+            {
+                return _subtypeEntities[internalRef];
+            }
+            Logger.Warning($"AcisReader: Invalid subtype entity reference: {internalRef}. Max is {_subtypeEntities.Count - 1}");
+            return null;
         }
 
         private void AddRecord(AcisRecord record)
         {
             if (record.Index < 0)
             {
-                RecordsList.Add(record); // For special records like End-of-ACIS-data
+                RecordsList.Add(record);
                 return;
             }
             while (RecordsList.Count <= record.Index)
@@ -40,15 +63,23 @@ namespace InventorLoaderCs
             AcisGlobalUtils.SetReader(this);
             _ReadHeaderText(reader);
 
-            int nextRecordIndex = 0; // Used for records without an explicit index
-            RecordsList.Clear(); // Clear previous data if any
+            int nextRecordIndex = 0;
+            RecordsList.Clear();
             _refChunks.Clear();
+            _subtypeEntities.Clear();
+
 
             while (!reader.EndOfStream)
             {
-                string linePeek = reader.ReadLine(); // Peek or read carefully
-                if (string.IsNullOrWhiteSpace(linePeek)) continue; // Skip empty lines
-                reader.BaseStream.Position -= Encoding.UTF8.GetByteCount(linePeek + Environment.NewLine); // Rewind
+                // Peek a line to check for EOF or only whitespace
+                long originalPosition = reader.BaseStream.Position;
+                string linePeek = reader.ReadLine();
+                if (linePeek == null) break; // True EOF
+                if (string.IsNullOrWhiteSpace(linePeek)) continue;
+
+                // Rewind stream to read the line properly with _ReadNextToken
+                reader.BaseStream.Position = originalPosition;
+                reader.DiscardBufferedData(); // Important after seeking
 
                 AcisRecord record = _ReadRecordTextInternal(reader, ref nextRecordIndex);
                 if (record != null)
@@ -63,10 +94,9 @@ namespace InventorLoaderCs
                 }
             }
             _ResolveChunkReferences();
-            // After all records are read and references resolved, create entities
             foreach (var record in RecordsList)
             {
-                if (record != null && record.Entity == null) // Avoid processing special records or already processed ones
+                if (record != null && record.Entity == null && record.Name != "End-of-ACIS-data")
                 {
                     AcisGlobalUtils.CreateEntity(record);
                 }
@@ -83,14 +113,14 @@ namespace InventorLoaderCs
             Header.Version = AcisUtils.IntToVersion(int.Parse(tokens[0]));
             Header.Records = int.Parse(tokens[1]);
             Header.Bodies = int.Parse(tokens[2]);
-            // tokens[3] is flags
+            // tokens[3] is flags, not explicitly stored in C# Header currently matching Python version
 
             if (Header.Version >= 2.0)
             {
                 line = reader.ReadLine()?.Trim();
                 if (line == null) throw new FileLoadException("ACIS file header is incomplete (product info missing).");
 
-                Header.ProdId = _ReadLengthPrefixedStringFromLine(reader, ref line);
+                Header.ProductId = _ReadLengthPrefixedStringFromLine(reader, ref line); // Corrected from ProdId
                 Header.ProdVer = _ReadLengthPrefixedStringFromLine(reader, ref line);
                 Header.Date = _ReadLengthPrefixedStringFromLine(reader, ref line);
 
@@ -101,7 +131,7 @@ namespace InventorLoaderCs
                 Header.ResAbs = double.Parse(tokens[1], CultureInfo.InvariantCulture);
                 Header.ResNor = double.Parse(tokens[2], CultureInfo.InvariantCulture);
             }
-            Logger.Info($"ACIS Text Header: Version={Header.Version}, Records={Header.Records}, ProdID='{Header.ProdId}'");
+            Logger.Info($"ACIS Text Header: Version={Header.Version}, Records={Header.Records}, ProdID='{Header.ProductId}'");
         }
 
         private string _ReadLengthPrefixedStringFromLine(StreamReader reader, ref string currentLine)
@@ -109,20 +139,21 @@ namespace InventorLoaderCs
             currentLine = currentLine.TrimStart();
             int firstSpace = currentLine.IndexOf(' ');
             if (firstSpace == -1) throw new FileLoadException("Invalid length-prefixed string format in header.");
-            int length = int.Parse(currentLine.Substring(0, firstSpace));
+            if (!int.TryParse(currentLine.Substring(0, firstSpace), out int length))
+                throw new FileLoadException($"Invalid length in header string: {currentLine.Substring(0, firstSpace)}");
 
-            string textValue = "";
-            // Check if the string is on the current line or continues to the next
-            if (firstSpace + 1 + length <= currentLine.Length)
+            string textValue;
+            currentLine = currentLine.Substring(firstSpace + 1);
+            if (length <= currentLine.Length)
             {
-                textValue = currentLine.Substring(firstSpace + 1, length);
-                currentLine = currentLine.Substring(firstSpace + 1 + length);
+                textValue = currentLine.Substring(0, length);
+                currentLine = currentLine.Substring(length);
             }
-            else // Should not happen with how ACIS SAT files are typically formatted for header
+            else
             {
-                 Logger.Error("Error reading length-prefixed string in ACIS Header, unexpected line break or format.");
-                 textValue = currentLine.Substring(firstSpace + 1);
-                 currentLine = ""; // Consumed whole line
+                 Logger.Error("Error reading length-prefixed string in ACIS Header, string spans multiple lines or format error.");
+                 textValue = currentLine; // Take what's left
+                 currentLine = "";
             }
             return textValue;
         }
@@ -152,7 +183,7 @@ namespace InventorLoaderCs
             }
             nextRecordIndex = Math.Max(nextRecordIndex, recordIndex + 1);
 
-            AcisRecord record = new AcisRecord(recordName) { Index = recordIndex };
+            AcisRecord record = new AcisRecord(recordName, this) { Index = recordIndex };
 
             while (true)
             {
@@ -167,13 +198,12 @@ namespace InventorLoaderCs
             return record;
         }
 
-        private string _ReadNextToken(StreamReader reader) // Text ACIS specific token reader
+        private string _ReadNextToken(StreamReader reader)
         {
             StringBuilder token = new StringBuilder();
             int cInt;
             bool inString = false;
             int stringLength = 0;
-            bool firstCharAfterAt = true;
 
             while ((cInt = reader.Peek()) != -1)
             {
@@ -192,8 +222,7 @@ namespace InventorLoaderCs
                 else if (c == '@')
                 {
                     if (token.Length > 0) break;
-                    reader.Read(); // Consume '@'
-                    // Now read the length
+                    reader.Read();
                     StringBuilder lenSb = new StringBuilder();
                     while((cInt = reader.Peek()) != -1 && char.IsDigit((char)cInt))
                     {
@@ -202,12 +231,11 @@ namespace InventorLoaderCs
                     if(!int.TryParse(lenSb.ToString(), out stringLength))
                     {
                         Logger.Error("Could not parse length after @");
-                        return null; // Error
+                        return null;
                     }
-                    // Consume the space after length
-                    if(reader.Peek() == ' ') reader.Read();
+                    if(reader.Peek() != ' ') { Logger.Error("Expected space after @<length>"); return null; }
+                    reader.Read(); // Consume space
                     inString = true;
-                    // token will now accumulate the string of stringLength
                 }
                 else if ("#(){}".Contains(c))
                 {
@@ -223,19 +251,24 @@ namespace InventorLoaderCs
             return token.Length > 0 ? token.ToString() : null;
         }
 
-
         private AcisChunk _ReadChunkTextInternal(StreamReader reader)
         {
             string token = _ReadNextToken(reader);
             if (token == null) return null;
-            return _TranslateChunkToken(token);
-        }
+            // Check if _ReadNextToken identified an @-string and directly returns content
+            // For now, assume if it's not special, it could be string content or ident
+            bool wasAtString = token.Length > 0 && _lastTokenWasAtString; // Need a flag from _ReadNextToken
+            _lastTokenWasAtString = false; // Reset flag
 
-        private AcisChunk _TranslateChunkToken(string token)
+            return _TranslateChunkToken(token, wasAtString);
+        }
+        private bool _lastTokenWasAtString = false; // Helper flag for text string parsing
+
+        private AcisChunk _TranslateChunkToken(string token, bool fromAtString = false)
         {
             if (token.StartsWith("$"))
             {
-                if (int.TryParse(token.Substring(1), out int refId))
+                if (long.TryParse(token.Substring(1), out long refId)) // Use long for refId
                 {
                     if (!_refChunks.TryGetValue(refId, out var chunkRef))
                     {
@@ -245,28 +278,33 @@ namespace InventorLoaderCs
                     return chunkRef;
                 }
             }
-            // Note: String handling with "@len str" is now done by _ReadNextToken
             else if (token == "#") return new AcisChunkTerminator();
             else if (token == "{") return new AcisChunkSubtypeOpen();
             else if (token == "}") return new AcisChunkSubtypeClose();
-            else if (token.Equals("0x0A", StringComparison.OrdinalIgnoreCase)) return new AcisChunkEnumValue(AcisConstants.TAG_TRUE, AcisConstants.TAG_TRUE, AcisUtils.BooleanValues);
-            else if (token.Equals("0x0B", StringComparison.OrdinalIgnoreCase)) return new AcisChunkEnumValue(AcisConstants.TAG_FALSE, AcisConstants.TAG_FALSE, AcisUtils.BooleanValues);
+            // Specific boolean text tokens
+            else if (token.Equals("T", StringComparison.OrdinalIgnoreCase)) return new AcisChunkEnumValue(true);
+            else if (token.Equals("F", StringComparison.OrdinalIgnoreCase)) return new AcisChunkEnumValue(false);
 
-            if (double.TryParse(token, NumberStyles.Any, CultureInfo.InvariantCulture, out double dVal))
-                return new AcisChunkDouble(dVal);
-            if (long.TryParse(token, out long lVal))
-                return new AcisChunkLong(lVal);
-
-            // If it was a string read by @len logic, it's stored in token directly by _ReadNextToken
-            // Otherwise, it's an identifier or enum text value
-            // Check if it matches known enum text values (e.g. "forward", "reversed" for SENSE)
-            // This part might need more context or a global enum string lookup
-            if (AcisUtils.TryGetEnumValue(token, out var enumMapping))
+            if (fromAtString) // If it's from an @-string, it's the string content.
             {
-                return new AcisChunkEnumValue(AcisConstants.TAG_ENUM_VALUE, enumMapping.Value, enumMapping.PossibleValues);
+                 return new AcisChunkUtf8U16(token); // Text ACIS strings are often AcisChunkUtf8U16 conceptually
             }
+            else // Not an @-string, try other types
+            {
+                if (double.TryParse(token, NumberStyles.Any, CultureInfo.InvariantCulture, out double dVal))
+                    return new AcisChunkDouble(dVal);
+                if (long.TryParse(token, out long lVal)) // Changed from int.TryParse to long.TryParse for consistency with AcisChunkLong
+                    return new AcisChunkLong(lVal);
 
-            return new AcisChunkIdent(token);
+                // Try to match known enum strings like "forward", "reversed", etc.
+                // AcisUtils.TryGetEnumValue returns an AcisChunkEnumValue with the original string if matched.
+                if (AcisUtils.TryGetEnumValue(token, out var enumMapping))
+                {
+                    return enumMapping;
+                }
+                // Default for unrecognized non-numeric, non-special tokens not from @-strings
+                return new AcisChunkIdent(token);
+            }
         }
 
         public bool ReadBinary(BinaryReader reader)
@@ -277,6 +315,7 @@ namespace InventorLoaderCs
             int nextRecordIndex = 0;
             RecordsList.Clear();
             _refChunks.Clear();
+            _subtypeEntities.Clear();
 
             try
             {
@@ -300,7 +339,7 @@ namespace InventorLoaderCs
             _ResolveChunkReferences();
             foreach (var record in RecordsList)
             {
-                if (record != null && record.Entity == null)
+                if (record != null && record.Entity == null && record.Name != "End-of-ACIS-data")
                 {
                     AcisGlobalUtils.CreateEntity(record);
                 }
@@ -311,74 +350,89 @@ namespace InventorLoaderCs
         private bool _ReadHeaderBinary(BinaryReader reader)
         {
             byte[] formatBytes = reader.ReadBytes(15);
-            Header.Format = Encoding.ASCII.GetString(formatBytes).TrimEnd('\0'); // Trim null chars
+            Header.Format = Encoding.ASCII.GetString(formatBytes).TrimEnd('\0');
 
             if (Header.Format != "ACIS BinaryFile" && !Header.Format.StartsWith("ASM BinaryFile")) {
                 Logger.Error($"Invalid ACIS binary file format: {Header.Format}");
                 return false;
             }
 
-            bool is64bit = Header.Format.EndsWith("8");
-            Func<long> readPossiblyLongIndex = is64bit ? (Func<long>)reader.ReadInt64 : reader.ReadInt32;
-            Func<uint> readUInt = is64bit ? (() => (uint)reader.ReadUInt64()) : reader.ReadUInt32;
+            bool isAsm8 = Header.Format == "ASM BinaryFile8";
+            Header.Is64BitRecordIndices = isAsm8;
+            Header.Is64BitEnums = isAsm8;
+            Header.IsAsmBinaryFile8Format = isAsm8; // Set this new flag
 
-            Header.Version = AcisUtils.IntToVersion((int)readUInt());
-            Header.Records = (int)readUInt(); // Could be long, but typically fits int
-            Header.Bodies = (int)readUInt();  // Could be long
-            uint flags = readUInt();
+            Func<uint> readUIntForHeader = Header.Is64BitEnums ? (() => (uint)reader.ReadUInt64()) : reader.ReadUInt32;
 
-            Header.ProdId = _ReadBinaryStringTagged(reader); // Assumes TAG_UTF8_U8
-            Header.ProdVer = _ReadBinaryStringTagged(reader);
-            Header.Date = _ReadBinaryStringTagged(reader);
+            Header.Version = AcisUtils.IntToVersion((int)readUIntForHeader());
+            Header.Records = (int)readUIntForHeader();
+            Header.Bodies = (int)readUIntForHeader();
+            uint flags = readUIntForHeader();
+
+            Header.ProductId = (_ReadChunkBinarySpecific(reader, reader.ReadByte(), false) as AcisChunkUtf8U8)?.Val as string ?? "";
+            Header.ProdVer = (_ReadChunkBinarySpecific(reader, reader.ReadByte(), false) as AcisChunkUtf8U8)?.Val as string ?? "";
+            Header.Date = (_ReadChunkBinarySpecific(reader, reader.ReadByte(), false) as AcisChunkUtf8U8)?.Val as string ?? "";
+
+            if (Header.ProductId == "SpaceClaim")
+            {
+                this._isSpaceClaimFormat = true;
+                Logger.Info("SpaceClaim ACIS format detected.");
+                // Consume potential extra SpaceClaim header chunks
+                byte spaceClaimTag1 = reader.ReadByte();
+                var spaceClaimChunk1 = _ReadChunkBinarySpecific(reader, spaceClaimTag1, false); // Read but don't store ref
+                Logger.Info($"SpaceClaim specific header chunk 1: Tag={spaceClaimTag1}, Val={spaceClaimChunk1.Val}");
+                if (spaceClaimChunk1.Tag == AcisConstants.TAG_TRUE) // If first was TRUE, read another
+                {
+                    byte spaceClaimTag2 = reader.ReadByte();
+                    var spaceClaimChunk2 = _ReadChunkBinarySpecific(reader, spaceClaimTag2, false);
+                    Logger.Info($"SpaceClaim specific header chunk 2: Tag={spaceClaimTag2}, Val={spaceClaimChunk2.Val}");
+                }
+            }
 
             Header.Scale = reader.ReadDouble();
             Header.ResAbs = reader.ReadDouble();
             Header.ResNor = reader.ReadDouble();
 
-            Logger.Info($"ACIS Binary Header: Version={Header.Version}, Records={Header.Records}, ProdID='{Header.ProdId}'");
+            Logger.Info($"ACIS Binary Header: Version={Header.Version}, Records={Header.Records}, ProdID='{Header.ProductId}', 64bitIdx={Header.Is64BitRecordIndices}, 64bitEnum={Header.Is64BitEnums}");
             return true;
-        }
-
-        private string _ReadBinaryStringTagged(BinaryReader reader)
-        {
-            byte tag = reader.ReadByte(); // Expect TAG_UTF8_U8 or similar
-            byte len;
-            switch(tag)
-            {
-                case AcisConstants.TAG_UTF8_U8:  len = reader.ReadByte(); break;
-                // Add TAG_UTF8_U16, TAG_UTF8_U32 if needed, reading appropriate length
-                default: throw new InvalidDataException($"Expected string tag, got {tag}");
-            }
-            byte[] bytes = reader.ReadBytes(len);
-            return Encoding.UTF8.GetString(bytes);
         }
 
         private AcisRecord _ReadRecordBinaryInternal(BinaryReader reader, ref int nextRecordIndex)
         {
             byte firstByteOrTag = reader.ReadByte();
-            int recordIndex;
+            long recordIndexL; // Use long for 64-bit indices
             List<string> nameParts = new List<string>();
 
             if (firstByteOrTag != AcisConstants.TAG_IDENT && firstByteOrTag != AcisConstants.TAG_SUBIDENT && firstByteOrTag != AcisConstants.TAG_TERMINATOR)
             {
-                byte[] indexBytes = new byte[4]; // Assuming 32-bit index
-                indexBytes[0] = firstByteOrTag;
-                for(int k=1; k<4; ++k) indexBytes[k] = reader.ReadByte();
-                recordIndex = BitConverter.ToInt32(indexBytes,0);
+                if (Header.Is64BitRecordIndices)
+                {
+                    byte[] indexBytes = new byte[8];
+                    indexBytes[0] = firstByteOrTag;
+                    for(int k=1; k<8; ++k) indexBytes[k] = reader.ReadByte();
+                    recordIndexL = BitConverter.ToInt64(indexBytes,0);
+                }
+                else
+                {
+                    byte[] indexBytes = new byte[4];
+                    indexBytes[0] = firstByteOrTag;
+                    for(int k=1; k<4; ++k) indexBytes[k] = reader.ReadByte();
+                    recordIndexL = BitConverter.ToInt32(indexBytes,0);
+                }
 
                 byte typeTag = reader.ReadByte();
                 nameParts.Add(_ReadChunkBinarySpecific(reader, typeTag, false).Val as string);
             }
-            else if (firstByteOrTag == AcisConstants.TAG_TERMINATOR) // EOF marker
+            else if (firstByteOrTag == AcisConstants.TAG_TERMINATOR)
             {
-                 return new AcisRecord("End-of-ACIS-data") { Index = -2 }; // Special index for EOF
+                 return new AcisRecord("End-of-ACIS-data", this) { Index = -2 };
             }
-            else // Is TAG_IDENT or TAG_SUBIDENT
+            else
             {
-                recordIndex = nextRecordIndex;
+                recordIndexL = nextRecordIndex;
                 nameParts.Add(_ReadChunkBinarySpecific(reader, firstByteOrTag, false).Val as string);
             }
-            nextRecordIndex = Math.Max(nextRecordIndex, recordIndex + 1);
+            nextRecordIndex = Math.Max(nextRecordIndex, (int)recordIndexL + 1);
 
             while(reader.BaseStream.Position < reader.BaseStream.Length)
             {
@@ -405,7 +459,8 @@ namespace InventorLoaderCs
                  return null;
             }
 
-            AcisRecord record = new AcisRecord(recordName) { Index = recordIndex };
+            AcisRecord record = new AcisRecord(recordName, this) { Index = (int)recordIndexL };
+            if (record.Name == "End-of-ACIS-data") return record;
 
             while (reader.BaseStream.Position < reader.BaseStream.Length)
             {
@@ -429,34 +484,73 @@ namespace InventorLoaderCs
 
         private AcisChunk _ReadChunkBinarySpecific(BinaryReader reader, byte tag, bool storeRef = true)
         {
-             AcisChunk chunk = null;
-            if (tag == AcisConstants.TAG_CHAR) { chunk = new AcisChunkChar(); chunk.Val = reader.ReadChar(); }
-            else if (tag == AcisConstants.TAG_SHORT) { chunk = new AcisChunkShort(); chunk.Val = reader.ReadInt16(); }
-            else if (tag == AcisConstants.TAG_LONG) { chunk = new AcisChunkLong(); chunk.Val = Header.Format.EndsWith("8") ? reader.ReadInt64() : reader.ReadInt32(); }
-            else if (tag == AcisConstants.TAG_INT64) { chunk = new AcisChunkHuge(); chunk.Val = reader.ReadInt64(); }
-            else if (tag == AcisConstants.TAG_FLOAT) { chunk = new AcisChunkFloat(); chunk.Val = reader.ReadSingle(); }
-            else if (tag == AcisConstants.TAG_DOUBLE) { chunk = new AcisChunkDouble(); chunk.Val = reader.ReadDouble(); }
-            else if (tag == AcisConstants.TAG_UTF8_U8) { chunk = new AcisChunkUtf8U8(_ReadBinaryStringTagged(reader)); } // String reading needs tag again
-            else if (tag == AcisConstants.TAG_UTF8_U16) { var len = reader.ReadUInt16(); chunk = new AcisChunkUtf8U16(Encoding.Unicode.GetString(reader.ReadBytes(len*2)));}
-            else if (tag == AcisConstants.TAG_UTF8_U32_A || tag == AcisConstants.TAG_UTF8_U32_B) { var len = reader.ReadUInt32(); chunk = new AcisChunkUtf8U32A(Encoding.UTF8.GetString(reader.ReadBytes((int)len)));}
-            else if (tag == AcisConstants.TAG_TRUE) { chunk = new AcisChunkEnumValue(tag, AcisConstants.TAG_TRUE, AcisUtils.BooleanValues); }
-            else if (tag == AcisConstants.TAG_FALSE) { chunk = new AcisChunkEnumValue(tag, AcisConstants.TAG_FALSE, AcisUtils.BooleanValues); }
-            else if (tag == AcisConstants.TAG_ENTITY_REF) {
-                long refIdRaw = Header.Format.EndsWith("8") ? reader.ReadInt64() : reader.ReadInt32();
-                int refId = (int)refIdRaw; // Assuming refs fit in int
-                if (storeRef && _refChunks.TryGetValue(refId, out var chunkRef)) { chunk = chunkRef; }
-                else { chunkRef = new AcisChunkEntityRef(refId); chunk = chunkRef; if(storeRef && refId != -1) _refChunks[refId] = chunkRef; }
+            AcisChunk chunk = null;
+            switch(tag)
+            {
+                case AcisConstants.TAG_CHAR: chunk = new AcisChunkChar((char)reader.ReadByte()); break;
+                case AcisConstants.TAG_SHORT: chunk = new AcisChunkShort(reader.ReadInt16()); break;
+                case AcisConstants.TAG_LONG:
+                    chunk = new AcisChunkLong(Header.IsAsmBinaryFile8Format ? reader.ReadInt64() : reader.ReadInt32());
+                    break;
+                case AcisConstants.TAG_INT64: chunk = new AcisChunkHuge(reader.ReadInt64()); break;
+                case AcisConstants.TAG_FLOAT: chunk = new AcisChunkFloat(reader.ReadSingle()); break;
+                case AcisConstants.TAG_DOUBLE: chunk = new AcisChunkDouble(reader.ReadDouble()); break;
+
+                case AcisConstants.TAG_UTF8_U8:
+                    chunk = new AcisChunkUtf8U8(AcisGlobalUtils.ReadStringWithByteLengthPrefix(reader, _isSpaceClaimFormat ? Encoding.GetEncoding("windows-1252") : Encoding.UTF8));
+                    break;
+                case AcisConstants.TAG_UTF8_U16:
+                    // For TAG_UTF8_U16, ACIS usually means char count and UTF-16 encoding.
+                    // SpaceClaim's use of windows-1252 here would be unusual but we follow the general flag.
+                    // However, if it's truly UTF-16, windows-1252 would be wrong.
+                    // Python code Acis.py uses UTF16 for TAG_UTF8_U16 regardless of SpaceClaim.
+                    chunk = new AcisChunkUtf8U16(AcisGlobalUtils.ReadStringWithUInt16LengthPrefix(reader, Encoding.Unicode, true));
+                    break;
+                case AcisConstants.TAG_UTF8_U32_A:
+                case AcisConstants.TAG_UTF8_U32_B:
+                    // Similar to UTF16, typically means char count and UTF-32.
+                    // Python code Acis.py uses UTF32 for these.
+                    chunk = new AcisChunkUtf8U32A(AcisGlobalUtils.ReadStringWithUInt32LengthPrefix(reader, Encoding.UTF32, true));
+                    break;
+
+                case AcisConstants.TAG_TRUE: chunk = new AcisChunkEnumValue(true); break;
+                case AcisConstants.TAG_FALSE: chunk = new AcisChunkEnumValue(false); break;
+
+                case AcisConstants.TAG_ENTITY_REF:
+                    long refId = Header.Is64BitRecordIndices ? reader.ReadInt64() : reader.ReadInt32();
+                    if (storeRef && _refChunks.TryGetValue(refId, out var chunkRef)) { chunk = chunkRef; }
+                    else { chunkRef = new AcisChunkEntityRef(refId); chunk = chunkRef; if (storeRef && refId != -1L) _refChunks[refId] = chunkRef; }
+                    break;
+
+                case AcisConstants.TAG_IDENT:
+                    chunk = new AcisChunkIdent(AcisGlobalUtils.ReadStringWithByteLengthPrefix(reader, _isSpaceClaimFormat ? Encoding.GetEncoding("windows-1252") : Encoding.UTF8));
+                    break;
+                case AcisConstants.TAG_SUBIDENT:
+                    chunk = new AcisChunkSubident(AcisGlobalUtils.ReadStringWithByteLengthPrefix(reader, _isSpaceClaimFormat ? Encoding.GetEncoding("windows-1252") : Encoding.UTF8));
+                    break;
+
+                case AcisConstants.TAG_SUBTYPE_OPEN: chunk = new AcisChunkSubtypeOpen(); break;
+                case AcisConstants.TAG_SUBTYPE_CLOSE: chunk = new AcisChunkSubtypeClose(); break;
+                case AcisConstants.TAG_TERMINATOR: chunk = new AcisChunkTerminator(); break;
+
+                case AcisConstants.TAG_POSITION:  // Stored as doubles in ACIS binary spec
+                    chunk = new AcisChunkPosition(new Vector3((float)reader.ReadDouble(), (float)reader.ReadDouble(), (float)reader.ReadDouble()));
+                    break;
+                case AcisConstants.TAG_VECTOR_3D:
+                    chunk = new AcisChunkVector3D(new Vector3((float)reader.ReadDouble(), (float)reader.ReadDouble(), (float)reader.ReadDouble()));
+                    break;
+                case AcisConstants.TAG_VECTOR_2D:
+                    chunk = new AcisChunkVector2D(new Vector2((float)reader.ReadDouble(), (float)reader.ReadDouble()));
+                    break;
+
+                case AcisConstants.TAG_ENUM_VALUE:
+                    chunk = new AcisChunkEnumValue(Header.Is64BitEnums ? reader.ReadInt64() : reader.ReadInt32(), null);
+                    break;
+
+                default:
+                    Logger.Error($"AcisReader: Unknown binary chunk tag: {tag:X2}");
+                    throw new InvalidDataException($"Unknown binary chunk tag: {tag:X2}");
             }
-            else if (tag == AcisConstants.TAG_IDENT) { chunk = new AcisChunkIdent(_ReadBinaryStringTagged(reader));}
-            else if (tag == AcisConstants.TAG_SUBIDENT) { chunk = new AcisChunkSubident(_ReadBinaryStringTagged(reader)); }
-            else if (tag == AcisConstants.TAG_SUBTYPE_OPEN) { chunk = new AcisChunkSubtypeOpen(); }
-            else if (tag == AcisConstants.TAG_SUBTYPE_CLOSE) { chunk = new AcisChunkSubtypeClose(); }
-            else if (tag == AcisConstants.TAG_TERMINATOR) { chunk = new AcisChunkTerminator(); }
-            else if (tag == AcisConstants.TAG_POSITION) { chunk = new AcisChunkPosition(new System.Numerics.Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle())); }
-            else if (tag == AcisConstants.TAG_VECTOR_3D) { chunk = new AcisChunkVector3D(new System.Numerics.Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle())); }
-            else if (tag == AcisConstants.TAG_VECTOR_2D) { chunk = new AcisChunkVector2D(new System.Numerics.Vector2(reader.ReadSingle(), reader.ReadSingle())); }
-            else if (tag == AcisConstants.TAG_ENUM_VALUE) { chunk = new AcisChunkEnumValue(); chunk.Val = Header.Format.EndsWith("8") ? (int)reader.ReadInt64() : reader.ReadInt32(); }
-            else { Logger.Error($"AcisReader: Unknown binary chunk tag: {tag:X2}"); throw new InvalidDataException($"Unknown binary chunk tag: {tag:X2}"); }
             return chunk;
         }
 
@@ -465,8 +559,9 @@ namespace InventorLoaderCs
             Logger.Info("AcisReader: Resolving chunk references...");
             foreach (var refChunkPair in _refChunks)
             {
-                int recordIndex = refChunkPair.Key;
+                long recordIndexL = refChunkPair.Key;
                 AcisChunkEntityRef chunkRef = refChunkPair.Value;
+                int recordIndex = (int)recordIndexL; // Assuming indices fit in int for List access
 
                 if (recordIndex >= 0 && recordIndex < RecordsList.Count && RecordsList[recordIndex] != null)
                 {

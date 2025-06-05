@@ -248,6 +248,37 @@ namespace InventorLoaderCs
             int minor = (int)Math.Round((versionDouble - major) * 100);
             return major * 100 + minor;
         }
+
+        public static string ReadStringWithByteLengthPrefix(BinaryReader reader, Encoding encoding)
+        {
+            byte length = reader.ReadByte();
+            if (length == 0) return string.Empty;
+            byte[] bytes = reader.ReadBytes(length);
+            return encoding.GetString(bytes);
+        }
+
+        public static string ReadStringWithUInt16LengthPrefix(BinaryReader reader, Encoding encoding, bool isCharCount = false)
+        {
+            ushort length = reader.ReadUInt16();
+            if (length == 0) return string.Empty;
+            int bytesToRead = isCharCount && (encoding == Encoding.Unicode || encoding == Encoding.BigEndianUnicode) ? length * 2 : length;
+            byte[] bytes = reader.ReadBytes(bytesToRead);
+            return encoding.GetString(bytes);
+        }
+
+        public static string ReadStringWithUInt32LengthPrefix(BinaryReader reader, Encoding encoding, bool isCharCount = false)
+        {
+            uint length = reader.ReadUInt32();
+            if (length == 0) return string.Empty;
+            // Ensure length is not excessively large to prevent OutOfMemoryException
+            if (length > 1024 * 1024 * 100) // 100 MB limit, arbitrary
+            {
+                throw new IOException($"Attempting to read string with excessive length: {length}");
+            }
+            int bytesToRead = isCharCount && (encoding == Encoding.Unicode || encoding == Encoding.BigEndianUnicode) ? (int)length * 2 : (int)length;
+            byte[] bytes = reader.ReadBytes(bytesToRead);
+            return encoding.GetString(bytes);
+        }
     }
 
     // Static dictionaries for enum string to value mapping (populated as needed)
@@ -281,19 +312,48 @@ namespace InventorLoaderCs
 
     public class Law
     {
-        public string Equation { get; set; }
+        public string EquationString { get; set; }
+        public List<object> Parameters { get; set; } // Placeholder for specific LawParameter type or structure
 
         public Law(string eq)
         {
-            Equation = eq.Replace("^", " ** "); // Basic transformation
+            // Python code replaces '^' with ' ** ' for eval. Here we store original.
+            EquationString = eq;
+            Parameters = new List<object>();
         }
 
-        public object Evaluate(object x) // Parameter X could be double or Vector, return type depends on equation
+        // Evaluate method would be complex, involving a math expression parser. Deferred.
+        public object Evaluate(object x)
         {
-            // Method implementation deferred
-            throw new NotImplementedException();
+            throw new NotImplementedException("Law evaluation is not implemented.");
         }
     }
+
+    public class Helix
+    {
+        public Interval RadAngles { get; set; }
+        public Vector3 PosCenter { get; set; }
+        public Vector3 DirMajor { get; set; } // Defines major radius and orientation
+        public Vector3 DirMinor { get; set; } // Defines minor radius and orientation
+        public Vector3 DirPitch { get; set; } // Pitch vector (direction and magnitude per revolution)
+        public double FacApex { get; set; }   // Apex factor for tapered helix
+        public Vector3 VecAxis { get; set; }   // Axis of the helix
+
+        // Default constructor for placeholder
+        public Helix()
+        {
+            RadAngles = new Interval(new Range("F", 0.0), new Range("F", 2.0 * Math.PI)); // Default one turn
+            PosCenter = Vector3.Zero;
+            DirMajor = Vector3.UnitX; // Default radius 1 along X
+            DirMinor = Vector3.UnitY; // Default circular (aligned with Y)
+            DirPitch = Vector3.UnitZ; // Default pitch 1 along Z
+            FacApex = 0.0; // No taper
+            VecAxis = Vector3.UnitZ;
+        }
+        // Build method would generate points or a curve. Deferred.
+        public object Build() { throw new NotImplementedException(); }
+    }
+
 
     public class BS_Curve
     {

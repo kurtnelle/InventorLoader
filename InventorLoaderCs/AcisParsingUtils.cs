@@ -3,15 +3,13 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Numerics;
+using System.Linq; // Required for Sum()
 
 namespace InventorLoaderCs
 {
-    // Placeholder enums that would ideally be in a shared location like AcisUtils.cs or ImporterConstants.cs
-    public enum SenseEnum { FORWARD, REVERSED, UNKNOWN } // From Acis.py SENSE
-    public enum RotationFlagEnum { NO_ROTATE, ROTATE }
-    public enum ReflectionFlagEnum { NO_REFLECT, REFLECT }
-    public enum ShearFlagEnum { NO_SHEAR, SHEAR }
-    public enum RangeTypeEnum { I, F } // For Interval parsing, from Acis.py RANGE ('I'/'F')
+    // Enums like SenseEnum, RotationFlagEnum, etc., are in AcisEntities.cs
+    // RangeTypeEnum is here as it's closely tied to GetRange parsing logic.
+    public enum RangeTypeEnum { I, F }
 
 
     public static class AcisParsingUtils
@@ -53,7 +51,7 @@ namespace InventorLoaderCs
                 chunkIndex++;
                 return enumChunk.Tag == AcisConstants.TAG_TRUE;
             }
-            string textVal = GetChunkVal<string>(record, ref chunkIndex, fieldName); // Consumes chunk via GetChunkVal
+            string textVal = GetText(record, ref chunkIndex, fieldName); // Use GetText to consume chunk
             if (AcisEnums.BOOLEAN_TEXT_MAP.TryGetValue(textVal, out bool mappedVal)) return mappedVal;
 
             Logger.Warning($"AcisParsingUtils: Could not parse boolean for '{fieldName}' from value '{textVal}'. Defaulting to false. Record: {record.Name} #{record.Index}");
@@ -102,9 +100,9 @@ namespace InventorLoaderCs
                 AcisEntity entity = refChunk.Record?.Entity;
                 if (entity == null && refChunk.Val is int refIdx && refIdx == -1) return null;
 
-                if (expectedEntityType != null && entity != null && entity.Record.Name != expectedEntityType && !entity.GetType().Name.Equals(expectedEntityType, StringComparison.OrdinalIgnoreCase))
+                if (expectedEntityType != null && entity != null && entity.Record.Name != expectedEntityType && !entity.GetType().Name.Equals(expectedEntityType, StringComparison.OrdinalIgnoreCase) && entity.SubtypeName != expectedEntityType)
                 {
-                    Logger.Warning($"AcisParsingUtils: Type mismatch for entity reference '{fieldName}'. Expected '{expectedEntityType}', got '{entity?.Record.Name ?? "null"}'. Record: {record.Name} #{record.Index}");
+                    Logger.Warning($"AcisParsingUtils: Type mismatch for entity reference '{fieldName}'. Expected '{expectedEntityType}', got '{entity?.Record.Name ?? "null"}' (Subtype: {entity?.SubtypeName ?? "N/A"}). Record: {record.Name} #{record.Index}");
                 }
                 return entity;
             }
@@ -130,7 +128,7 @@ namespace InventorLoaderCs
                      rawVal = mappedIntVal;
                 }
                 else if (Enum.TryParse<TEnum>(strVal, true, out TEnum parsedStrEnum)) {
-                    chunkIndex++;
+                    chunkIndex++; // Consumed the string chunk
                     return parsedStrEnum;
                 }
                 else
@@ -140,7 +138,7 @@ namespace InventorLoaderCs
                 }
             }
 
-            chunkIndex++;
+            chunkIndex++; // Consumed the chunk that contained rawVal
             try { return (TEnum)Enum.ToObject(typeof(TEnum), Convert.ToInt32(rawVal)); }
             catch {
                 Logger.Warning($"AcisParsingUtils: Could not convert value '{rawVal}' to enum {typeof(TEnum).Name} for field '{fieldName}'. Record: {record.Name} #{record.Index}. Defaulting to first enum value.");
@@ -150,12 +148,12 @@ namespace InventorLoaderCs
 
         public static Range GetRange(AcisRecord record, ref int chunkIndex, AcisHeader header, double defaultValue, string fieldName = "Range")
         {
-            string typeStr = GetText(record, ref chunkIndex, fieldName + ".Type"); // Changed from GetChunkVal
+            string typeStr = GetText(record, ref chunkIndex, fieldName + ".Type");
             RangeTypeEnum type = typeStr.Equals("I", StringComparison.OrdinalIgnoreCase) ? RangeTypeEnum.I : RangeTypeEnum.F;
             double limit = defaultValue;
             if (type == RangeTypeEnum.F)
             {
-                limit = GetFloat(record, ref chunkIndex, fieldName + ".Limit"); // Changed from GetChunkVal
+                limit = GetFloat(record, ref chunkIndex, fieldName + ".Limit");
             }
             return new Range(type.ToString(), limit, header.Scale);
         }
@@ -225,6 +223,7 @@ namespace InventorLoaderCs
         {
             closureType = "open";
             knotCount = 0;
+            if (record.Chunks.Count <= chunkIndex) { Logger.Error($"AcisParsingUtils: Not enough chunks for {fieldName}."); return false; }
             var chunk = record.Chunks[chunkIndex];
             if (chunk.Val is string strVal)
             {
@@ -268,8 +267,6 @@ namespace InventorLoaderCs
             uSingularity = "none"; vSingularity = "none";
             uKnotCount = 0; vKnotCount = 0;
 
-            // This is a simplification. Python code uses getEnumByValue with specific dictionaries.
-            // Here, assuming text chunks for these string-like enum values.
             uClosure = GetText(record, ref chunkIndex, fieldName + ".UClosure").ToLowerInvariant();
             vClosure = GetText(record, ref chunkIndex, fieldName + ".VClosure").ToLowerInvariant();
             uSingularity = GetText(record, ref chunkIndex, fieldName + ".USingularity").ToLowerInvariant();
@@ -278,6 +275,258 @@ namespace InventorLoaderCs
             uKnotCount = GetInteger(record, ref chunkIndex, fieldName + ".UKnotCount");
             vKnotCount = GetInteger(record, ref chunkIndex, fieldName + ".VKnotCount");
             return true;
+        }
+
+        public static bool ReadKnotsAndMults(AcisRecord record, ref int chunkIndex, int numKnotsFromHeader,
+                                           out List<double> knots, out List<int> mults, string fieldName)
+        {
+            knots = new List<double>(numKnotsFromHeader);
+            mults = new List<int>(numKnotsFromHeader);
+            Logger.Info($"AcisParsingUtils: Reading {numKnotsFromHeader} knots and multiplicities for {fieldName}. Record: {record.Name} #{record.Index}");
+
+            for (int i = 0; i < numKnotsFromHeader; i++)
+            {
+                if (record.Chunks.Count <= chunkIndex + 1)
+                {
+                    Logger.Error($"AcisParsingUtils: Not enough chunks for knot/multiplicity pair {i + 1} for {fieldName}. Record: {record.Name} #{record.Index}");
+                    return false;
+                }
+                knots.Add(GetFloat(record, ref chunkIndex, $"{fieldName}.Knot{i}"));
+                mults.Add(GetInteger(record, ref chunkIndex, $"{fieldName}.Mult{i}"));
+            }
+            return true;
+        }
+
+        public static void AdjustKnotsAndMults(List<double> knots, List<int> mults, int degree)
+        {
+            if (mults == null || mults.Count == 0)
+            {
+                Logger.Warning("AcisParsingUtils.AdjustKnotsAndMults: Multiplicity list is null or empty.");
+                return;
+            }
+            if (mults.Count > 0) mults[0] = degree + 1; // Clamped start
+            if (mults.Count > 1) mults[mults.Count - 1] = degree + 1; // Clamped end
+        }
+
+        public static bool ReadPoints2DList(AcisRecord record, ref int chunkIndex, AcisHeader header,
+                                          BSCurveData splineData, int expectedPoleCount, string fieldName)
+        {
+            Logger.Info($"AcisParsingUtils: Reading {expectedPoleCount} 2D poles for {fieldName}. Rational: {splineData.IsRational}. Record: {record.Name} #{record.Index}");
+            splineData.Poles2D = new List<Vector2>(expectedPoleCount);
+            if (splineData.IsRational) splineData.Weights = new List<double>(expectedPoleCount);
+
+            for (int i = 0; i < expectedPoleCount; i++)
+            {
+                if (record.Chunks.Count <= chunkIndex + 1)
+                {
+                    Logger.Error($"AcisParsingUtils: Not enough chunks for 2D pole {i + 1} for {fieldName}. Record: {record.Name} #{record.Index}");
+                    return false;
+                }
+                float x = (float)GetFloat(record, ref chunkIndex, $"{fieldName}.Pole{i}.X");
+                float y = (float)GetFloat(record, ref chunkIndex, $"{fieldName}.Pole{i}.Y");
+                splineData.Poles2D.Add(new Vector2(x, y));
+
+                if (splineData.IsRational)
+                {
+                    if (record.Chunks.Count <= chunkIndex) { Logger.Error($"AcisParsingUtils: Not enough chunks for weight of 2D pole {i + 1} for {fieldName}."); return false; }
+                    splineData.Weights.Add(GetFloat(record, ref chunkIndex, $"{fieldName}.Weight{i}"));
+                }
+            }
+            return true;
+        }
+
+        public static bool ReadPoints3DList(AcisRecord record, ref int chunkIndex, AcisHeader header,
+                                          BSCurveData splineData, int expectedPoleCount, string fieldName)
+        {
+            Logger.Info($"AcisParsingUtils: Reading {expectedPoleCount} 3D poles for {fieldName}. Rational: {splineData.IsRational}. Record: {record.Name} #{record.Index}");
+            splineData.Poles3D = new List<Vector3>(expectedPoleCount);
+            if (splineData.IsRational) splineData.Weights = new List<double>(expectedPoleCount);
+
+            for (int i = 0; i < expectedPoleCount; i++)
+            {
+                 if (record.Chunks.Count <= chunkIndex + 2)
+                {
+                    Logger.Error($"AcisParsingUtils: Not enough chunks for 3D pole {i + 1} for {fieldName}. Record: {record.Name} #{record.Index}");
+                    return false;
+                }
+                splineData.Poles3D.Add(GetLocation(record, ref chunkIndex, header, $"{fieldName}.Pole{i}"));
+
+                if (splineData.IsRational)
+                {
+                    if (record.Chunks.Count <= chunkIndex) { Logger.Error($"AcisParsingUtils: Not enough chunks for weight of 3D pole {i + 1} for {fieldName}."); return false; }
+                    splineData.Weights.Add(GetFloat(record, ref chunkIndex, $"{fieldName}.Weight{i}"));
+                }
+            }
+            return true;
+        }
+
+        public static bool ReadPoints3DSurface(AcisRecord record, ref int chunkIndex, AcisHeader header,
+                                             BSSurfaceData splineData, int expectedUPoleCount, int expectedVPoleCount,
+                                             string fieldName)
+        {
+            Logger.Info($"AcisParsingUtils: Reading {expectedUPoleCount}x{expectedVPoleCount} 3D surface poles for {fieldName}. Rational: {splineData.IsRational}. Record: {record.Name} #{record.Index}");
+            splineData.Poles3DGrid = new List<List<Vector3>>(expectedUPoleCount);
+            if (splineData.IsRational) splineData.WeightsGrid = new List<List<double>>(expectedUPoleCount);
+
+            for (int u = 0; u < expectedUPoleCount; u++)
+            {
+                var poleRow = new List<Vector3>(expectedVPoleCount);
+                var weightRow = splineData.IsRational ? new List<double>(expectedVPoleCount) : null;
+                for (int v = 0; v < expectedVPoleCount; v++)
+                {
+                    if (record.Chunks.Count <= chunkIndex + 2)
+                    {
+                        Logger.Error($"AcisParsingUtils: Not enough chunks for 3D surface pole U{u}V{v} for {fieldName}. Record: {record.Name} #{record.Index}");
+                        return false;
+                    }
+                    poleRow.Add(GetLocation(record, ref chunkIndex, header, $"{fieldName}.PoleU{u}V{v}"));
+                    if (splineData.IsRational)
+                    {
+                        if (record.Chunks.Count <= chunkIndex) { Logger.Error($"AcisParsingUtils: Not enough chunks for weight of 3D surface pole U{u}V{v} for {fieldName}."); return false; }
+                        weightRow.Add(GetFloat(record, ref chunkIndex, $"{fieldName}.WeightU{u}V{v}"));
+                    }
+                }
+                splineData.Poles3DGrid.Add(poleRow);
+                if (splineData.IsRational) splineData.WeightsGrid.Add(weightRow);
+            }
+            return true;
+        }
+
+        public static List<double> GetFloatArray(AcisRecord record, ref int chunkIndex, string fieldName)
+        {
+            Logger.Info($"AcisParsingUtils: Reading FloatArray for {fieldName}. Record: {record.Name} #{record.Index}");
+            int count = GetInteger(record, ref chunkIndex, fieldName + ".Count");
+            var list = new List<double>(count);
+            for (int i = 0; i < count; i++)
+            {
+                list.Add(GetFloat(record, ref chunkIndex, $"{fieldName}.Value{i}"));
+            }
+            return list;
+        }
+
+        public static Law ReadLaw(AcisRecord record, ref int chunkIndex, AcisHeader header, string fieldName)
+        {
+            Logger.Info($"AcisParsingUtils: Reading Law for {fieldName}. Record: {record.Name} #{record.Index}");
+            string lawTypeStringFromFile = GetText(record, ref chunkIndex, fieldName + ".LawTypeString");
+
+            Law law = new Law(lawTypeStringFromFile); // Constructor sets LawTypeString
+
+            switch (law.LawTypeString.ToLowerInvariant())
+            {
+                case "null_law":
+                    // No further parameters. LawTypeString is already "null_law".
+                    break;
+                case "trans":
+                    double[] m = new double[13];
+                    for (int i = 0; i < 13; i++) m[i] = GetFloat(record, ref chunkIndex, $"{fieldName}.TRANS.MatrixVal{i}");
+                    bool rot = GetEnumByTag<RotationFlagEnum>(record, ref chunkIndex, $"{fieldName}.TRANS.HasRotation") == RotationFlagEnum.ROTATE;
+                    bool refl = GetEnumByTag<ReflectionFlagEnum>(record, ref chunkIndex, $"{fieldName}.TRANS.HasReflection") == ReflectionFlagEnum.REFLECT;
+                    bool shr = GetEnumByTag<ShearFlagEnum>(record, ref chunkIndex, $"{fieldName}.TRANS.HasShear") == ShearFlagEnum.SHEAR;
+                    law.Parameters.Add(new LawTransformParameter(m, rot, refl, shr));
+                    break;
+                case "edge":
+                    var edgeParam = new LawEdgeParameter
+                    {
+                        ReferencedCurve = GetRefNode(record, ref chunkIndex, fieldName + ".EDGE.CurveRef", "curve-entity") as Curve,
+                        Param1 = GetFloat(record, ref chunkIndex, fieldName + ".EDGE.FloatParam1"),
+                        Param2 = GetFloat(record, ref chunkIndex, fieldName + ".EDGE.FloatParam2")
+                    };
+                    law.Parameters.Add(edgeParam);
+                    break;
+                case "spline_law":
+                    var splineParam = new LawSplineLawParameter
+                    {
+                        Type = GetInteger(record, ref chunkIndex, fieldName + ".SPLINE_LAW.IntParam"),
+                        Knots = GetFloatArray(record, ref chunkIndex, fieldName + ".SPLINE_LAW.KnotsArray"),
+                        Values = GetFloatArray(record, ref chunkIndex, fieldName + ".SPLINE_LAW.ValuesArray"),
+                        Point = GetPoint(record, ref chunkIndex, fieldName + ".SPLINE_LAW.PointParam")
+                    };
+                    law.Parameters.Add(splineParam);
+                    break;
+                // Cases for constant_law, linear_law etc. could be added here if they have specific structures
+                // For example:
+                // case "constant_law":
+                //    law.ConstantValue = GetFloat(record, ref chunkIndex, fieldName + ".ConstantValue");
+                //    break;
+                default:
+                    // The lawTypeString is the equation itself.
+                    law.EquationString = law.LawTypeString;
+                    Logger.Info($"AcisParsingUtils: Law type '{law.LawTypeString}' treated as generic equation string for {fieldName}.");
+                    break;
+            }
+            return law;
+        }
+
+        public static Law ReadFormulaStructure(AcisRecord record, ref int chunkIndex, AcisHeader header, string fieldName)
+        {
+            Logger.Info($"AcisParsingUtils: Reading FormulaStructure for {fieldName}. Record: {record.Name} #{record.Index}");
+
+            // The first part of a formula-structure is the primary law/equation string itself.
+            string primaryLawString = GetText(record, ref chunkIndex, fieldName + ".PrimaryLawString");
+            Law mainLaw = new Law(primaryLawString); // Sets LawTypeString
+            if (! (primaryLawString.ToLowerInvariant() == "null_law" ||
+                   primaryLawString.ToLowerInvariant() == "trans" ||
+                   primaryLawString.ToLowerInvariant() == "edge" ||
+                   primaryLawString.ToLowerInvariant() == "spline_law") ) // Add other known types
+            {
+                 mainLaw.EquationString = primaryLawString; // If it's not a known keyword, it's an equation
+            }
+            // If primaryLawString is "TRANS", "EDGE", etc., ReadLaw would handle its specific parameters.
+            // However, the structure of formula-structure in ACIS is typically:
+            // formula-structure { "equation_string_or_main_law_type" num_vars {var1_law} {var2_law} ... }
+            // So, if primaryLawString was "TRANS", its specific params (matrix, flags) would be read *inside* a ReadLaw call
+            // if ReadFormulaStructure was designed to call ReadLaw for the main part.
+            // The current design based on Python seems to take the first string as the literal equation or a simple type.
+            // Let's stick to the provided structure: first string is primary, then num_vars, then var_laws.
+
+            int numVars = GetInteger(record, ref chunkIndex, fieldName + ".NumVariables");
+            for (int i = 0; i < numVars; i++)
+            {
+                // Each "variable" is itself a Law structure, potentially complex.
+                mainLaw.Parameters.Add(ReadLaw(record, ref chunkIndex, header, $"{fieldName}.VariableLaw{i}"));
+            }
+            return mainLaw;
+        }
+
+        public static Helix ReadHelixData(AcisRecord record, ref int chunkIndex, AcisHeader header, string fieldName)
+        {
+            Logger.Info($"AcisParsingUtils: Reading HelixData for {fieldName}. Record: {record.Name} #{record.Index}");
+            Helix helix = new Helix();
+
+            helix.RadAngles = GetInterval(record, ref chunkIndex, header, 0.0, 2.0 * Math.PI, fieldName + ".RadAngles");
+            helix.PosCenter = GetLocation(record, ref chunkIndex, header, fieldName + ".PosCenter");
+            helix.DirMajor = GetLocation(record, ref chunkIndex, header, fieldName + ".DirMajor");
+            helix.DirMinor = GetLocation(record, ref chunkIndex, header, fieldName + ".DirMinor");
+            helix.DirPitch = GetLocation(record, ref chunkIndex, header, fieldName + ".DirPitch");
+            helix.FacApex = (float)GetFloat(record, ref chunkIndex, fieldName + ".FacApex");
+            helix.VecAxis = GetVector(record, ref chunkIndex, fieldName + ".VecAxis");
+
+            // Skip the four null references (surface1, surface2, pcurve1, pcurve2)
+            // Each ref node takes one chunk
+            for(int i=0; i < 4; i++)
+            {
+                // We expect these to be "$-1" or similar null refs.
+                var nullRef = GetRefNode(record, ref chunkIndex, $"{fieldName}.NullRef{i+1}");
+                if (nullRef != null)
+                {
+                    Logger.Warning($"AcisParsingUtils: Expected null reference for Helix trailing data {i+1}, but got {nullRef.Record.Name}. Field: {fieldName}");
+                }
+            }
+
+            return helix;
+        }
+
+        public static List<Tuple<int, int>> GetDcIndexMappings(AcisRecord record, ref int chunkIndex, string fieldName)
+        {
+            var mappings = new List<Tuple<int, int>>();
+            int count = GetInteger(record, ref chunkIndex, fieldName + ".Count");
+            for (int i = 0; i < count; i++)
+            {
+                int dcIdx = GetInteger(record, ref chunkIndex, $"{fieldName}.DcIdx{i}");
+                int value = GetInteger(record, ref chunkIndex, $"{fieldName}.Value{i}");
+                mappings.Add(new Tuple<int, int>(dcIdx, value));
+            }
+            return mappings;
         }
     }
 }

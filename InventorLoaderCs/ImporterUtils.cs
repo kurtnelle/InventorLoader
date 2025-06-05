@@ -191,4 +191,124 @@ namespace InventorLoaderCs
             return Math.Abs(a - b) < tolerance;
         }
     }
+
+    public static class AcisGlobalUtils // New or relocated class
+    {
+        private static AcisReader _currentReader; // To access Header, etc.
+
+        public static void SetReader(AcisReader reader) => _currentReader = reader;
+        public static AcisReader GetReader() => _currentReader;
+
+        // Based on Acis.py Acis.read_string_with_len_byte
+        public static string ReadStringWithByteLengthPrefix(BinaryReader reader, Encoding encoding)
+        {
+            if (reader == null) throw new ArgumentNullException(nameof(reader));
+            if (encoding == null) throw new ArgumentNullException(nameof(encoding));
+
+            byte length = reader.ReadByte();
+            if (length == 0) return string.Empty;
+
+            byte[] stringBytes = reader.ReadBytes(length);
+            return encoding.GetString(stringBytes).TrimEnd('\0');
+        }
+
+        // Based on Acis.py Acis.read_string_with_len_short
+        public static string ReadStringWithUInt16LengthPrefix(BinaryReader reader, Encoding encoding, bool isCharCount = false)
+        {
+            if (reader == null) throw new ArgumentNullException(nameof(reader));
+            if (encoding == null) throw new ArgumentNullException(nameof(encoding));
+
+            ushort length = reader.ReadUInt16();
+            if (length == 0) return string.Empty;
+
+            int bytesToRead = length;
+            if (isCharCount)
+            {
+                // If encoding is UTF-16, char count is length. Byte count is length * 2.
+                // For other encodings, this logic might be more complex if a character can be > 1 byte.
+                // For UTF-8, char count != byte count.
+                // ACIS TAG_UTF8_U16 typically means length is char count, and encoding is UTF-16.
+                if (encoding.Equals(Encoding.Unicode) || encoding.Equals(Encoding.BigEndianUnicode))
+                    bytesToRead = length * 2;
+                else if (encoding.Equals(Encoding.UTF8) && isCharCount)
+                {
+                    // This is tricky. Reading 'char count' for UTF-8 means we don't know byte count directly.
+                    // This scenario should be rare for ACIS tags. Usually length is byte length for UTF8.
+                    // For now, assume if isCharCount is true for UTF8, it's a simple ASCII subset or error in assumption.
+                    // A robust way would be to read char by char, but that's inefficient with BinaryReader.
+                    // Given ACIS common practice, TAG_UTF8_U16 means char_count for UTF16, not UTF8.
+                    // If this method is called with UTF8 and isCharCount, it's likely a misinterpretation of the ACIS tag.
+                    Logger.Warning("ReadStringWithUInt16LengthPrefix: isCharCount=true with UTF-8 is ambiguous. Assuming length is byte length.");
+                     // Fallback to length as byte length for UTF8 if isCharCount was mistakenly true.
+                }
+
+            }
+
+            byte[] stringBytes = reader.ReadBytes(bytesToRead);
+            return encoding.GetString(stringBytes).TrimEnd('\0');
+        }
+
+        // Based on Acis.py Acis.read_string_with_len_int
+        public static string ReadStringWithUInt32LengthPrefix(BinaryReader reader, Encoding encoding, bool isCharCount = false)
+        {
+            if (reader == null) throw new ArgumentNullException(nameof(reader));
+            if (encoding == null) throw new ArgumentNullException(nameof(encoding));
+
+            uint length = reader.ReadUInt32();
+            if (length == 0) return string.Empty;
+            if (length > 0x1000000) // Sanity check for huge length
+            {
+                Logger.Error($"ReadStringWithUInt32LengthPrefix: Suspiciously large string length: {length}");
+                // Potentially throw or return error, or try to read a limited amount
+                return string.Empty; // Or handle error appropriately
+            }
+
+
+            int bytesToRead = (int)length;
+            if (isCharCount)
+            {
+                 // Similar logic to UInt16 version for char count vs byte count
+                if (encoding.Equals(Encoding.Unicode) || encoding.Equals(Encoding.BigEndianUnicode))
+                    bytesToRead = (int)length * 2;
+                else if (encoding.Equals(Encoding.UTF8) && isCharCount)
+                {
+                    Logger.Warning("ReadStringWithUInt32LengthPrefix: isCharCount=true with UTF-8 is ambiguous. Assuming length is byte length.");
+                }
+            }
+
+            byte[] stringBytes = reader.ReadBytes(bytesToRead);
+            return encoding.GetString(stringBytes).TrimEnd('\0');
+        }
+
+        // Placeholder for CreateEntity and other global ACIS utilities if they are moved here
+        public static AcisEntity CreateEntity(AcisRecord record)
+        {
+            // This should ideally be in AcisReader or a dedicated factory that AcisReader uses.
+            // For now, to unblock AcisEntities that might call this.
+            Logger.Warning("AcisGlobalUtils.CreateEntity is a placeholder and might not function correctly here.");
+            if (_currentReader == null)
+            {
+                Logger.Error("AcisGlobalUtils.CreateEntity: Current AcisReader is not set.");
+                return null;
+            }
+            // Basic instantiation logic (copied and simplified from AcisReader's eventual goal)
+            if (AcisUtils._recordToEntityTypeMap.TryGetValue(record.Name, out Type entityType))
+            {
+                try
+                {
+                    AcisEntity entity = (AcisEntity)Activator.CreateInstance(entityType);
+                    record.Entity = entity; // Link record and entity
+                    entity.Set(record); // Parse standard fields and then type-specific fields
+                    return entity;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to create or set entity {record.Name} #{record.Index}: {ex.Message}");
+                }
+            }
+            else Logger.Warning($"No C# class mapping for ACIS record type: {record.Name}");
+            return null;
+        }
+
+    }
 }

@@ -88,6 +88,46 @@ namespace InventorLoaderCs
         OP_UNKNOWN = 99
     }
 
+    // --- Law Parameter Holder Classes ---
+    public class LawTransformParameter
+    {
+        public Matrix4x4 TransformMatrix { get; set; }
+        public bool HasRotation { get; set; }
+        public bool HasReflection { get; set; }
+        public bool HasShear { get; set; }
+        // In Python, the transform within a law is just the 13 doubles + 3 flags.
+        // It's not a full transform-entity reference.
+        public LawTransformParameter(double[] m, bool rot, bool refl, bool shr)
+        {
+            float scale = (float)m[0];
+            TransformMatrix = new Matrix4x4(
+                (float)m[1]*scale, (float)m[2]*scale, (float)m[3]*scale, 0,
+                (float)m[4]*scale, (float)m[5]*scale, (float)m[6]*scale, 0,
+                (float)m[7]*scale, (float)m[8]*scale, (float)m[9]*scale, 0,
+                (float)m[10],      (float)m[11],      (float)m[12],     1
+            );
+            HasRotation = rot;
+            HasReflection = refl;
+            HasShear = shr;
+        }
+    }
+
+    public class LawEdgeParameter
+    {
+        public Curve ReferencedCurve { get; set; }
+        public double Param1 { get; set; }
+        public double Param2 { get; set; }
+    }
+
+    public class LawSplineLawParameter
+    {
+        public int Type { get; set; } // Or some enum
+        public List<double> Knots { get; set; }
+        public List<double> Values { get; set; } // Corresponds to "y-values" or similar in spline laws
+        public Vector3 Point { get; set; } // Or Point entity reference
+    }
+
+
     public class VersionInfo
     {
         public int Major { get; set; }
@@ -322,6 +362,96 @@ namespace InventorLoaderCs
         public Guid VersionGuid { get; set; }
         // Add other fields from UFRxHeader1 as needed
     }
+
+    // --- ACIS Specific Data Structures (Potentially moved from AcisUtils or new) ---
+
+    public class Law
+    {
+        public string LawTypeString { get; set; } // The type read from file e.g. "TRANS", "EDGE", "null_law", or an equation
+        public string EquationString { get; set; } // If LawTypeString is an equation itself (not a keyword for a structured type)
+        public List<object> Parameters { get; set; } // Holds LawTransformParameter, LawEdgeParameter, LawSplineLawParameter, or other Law objects for variables
+
+        // Optional: Direct properties for very simple, standalone laws if not handled by separate parameter classes
+        // public double? ConstantValue { get; set; } // Example: For a "constant_law" type if it doesn't go into Parameters
+        // public AcisEntity ReferencedEntity { get; set; } // Example: For a simple reference-based law
+
+        public Law(string typeString)
+        {
+            LawTypeString = typeString;
+            Parameters = new List<object>();
+            // EquationString is set by the parser if LawTypeString is not a known keyword
+        }
+    }
+
+    public class Helix
+    {
+        public Interval RadAngles { get; set; } // start_angle, end_angle
+        public Vector3 PosCenter { get; set; }   // center_point (location)
+        public Vector3 DirMajor { get; set; }    // axis_start_point (location) - but used as direction vector
+        public Vector3 DirMinor { get; set; }    // major_axis_point (location) - but used as direction vector
+        public Vector3 DirPitch { get; set; }    // pitch_vec (vector) - but often given as location, take direction
+        public double FacApex { get; set; }      // apex_factor (double)
+        public Vector3 VecAxis { get; set; }     // axis_vec (vector) - normalized pitch direction
+
+        // New properties for projection curves/surfaces as per subtask
+        public Surface ProjectionSurface1 { get; set; }
+        public BSCurveData ProjectionPCurve1 { get; set; }
+        public Surface ProjectionSurface2 { get; set; }
+        public BSCurveData ProjectionPCurve2 { get; set; }
+
+        public Helix()
+        {
+            RadAngles = new Interval(0,0);
+        }
+    }
+
+    public class BSCurveData // Also used for BSurface poles/weights if needed
+    {
+        public int Degree { get; set; }
+        public bool IsPeriodic { get; set; }
+        public bool IsRational { get; set; }
+        public List<double> Knots { get; set; }
+        public List<int> Multiplicities { get; set; }
+        public List<Vector2> Poles2D { get; set; } // For 2D B-Splines (pcurves)
+        public List<Vector3> Poles3D { get; set; } // For 3D B-Splines
+        public List<double> Weights { get; set; }  // For rational B-Splines
+
+        public BSCurveData()
+        {
+            Knots = new List<double>();
+            Multiplicities = new List<int>();
+            Poles2D = new List<Vector2>();
+            Poles3D = new List<Vector3>();
+            Weights = new List<double>();
+        }
+    }
+
+    public class BSSurfaceData
+    {
+        public int UDegree { get; set; }
+        public int VDegree { get; set; }
+        public bool UPeriodic { get; set; }
+        public bool VPeriodic { get; set; }
+        public bool URational { get; set; } // Indicates if poles have weights in U direction
+        public bool VRational { get; set; } // Indicates if poles have weights in V direction (usually same as URational)
+        public List<double> UKnots { get; set; }
+        public List<int> UMultiplicities { get; set; }
+        public List<double> VKnots { get; set; }
+        public List<int> VMultiplicities { get; set; }
+        public List<List<Vector3>> Poles { get; set; } // Grid of 3D points
+        public List<List<double>> Weights { get; set; } // Grid of weights (if rational)
+
+        public BSSurfaceData()
+        {
+            UKnots = new List<double>();
+            UMultiplicities = new List<int>();
+            VKnots = new List<double>();
+            VMultiplicities = new List<int>();
+            Poles = new List<List<Vector3>>();
+            Weights = new List<List<double>>();
+        }
+    }
+
 
     // New struct/class for segment directory entries
     public class SegmentEntryInfo
@@ -946,6 +1076,89 @@ namespace InventorLoaderCs
             bool eof = CurrentReadOffset >= (Offset + Size);
             if (eof) LogAction(logFile, "EOF reached for this node.");
             return eof;
+        }
+
+        public uint[] ReadUInt32Array(string propertyName, int count, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(uint) * count, logFile, propertyName)) return null;
+            uint[] arr = new uint[count];
+            for(int i=0; i<count; i++)
+            {
+                var(val, newOffset) = ImporterUtils.GetUInt32(FullDataBuffer, CurrentReadOffset);
+                arr[i] = val;
+                CurrentReadOffset = newOffset;
+            }
+            ParsedContent[propertyName] = arr;
+            LogAction(logFile, $"Read {propertyName}: uint[{count}]");
+            return arr;
+        }
+
+        public Dictionary<string, TValue> ReadMapStringToObject<TValue>(string propertyName, Func<SecNode, StreamWriter, TValue> valueReaderFunc, StreamWriter logFile)
+        {
+            LogAction(logFile, $"Reading MapStringToObject for {propertyName}");
+            var map = new Dictionary<string, TValue>();
+            uint? count = ReadUInt32($"{propertyName}_count", logFile);
+            if (!count.HasValue)
+            {
+                LogAction(logFile, $"Error: Could not read count for map {propertyName}.");
+                ParsedContent[propertyName] = map; // Store empty map
+                return map;
+            }
+
+            for (int i = 0; i < count.Value; i++)
+            {
+                string key = ReadLen32Text16($"{propertyName}_Key{i}", logFile);
+                if (key == null)
+                {
+                    LogAction(logFile, $"Error: Could not read key for map entry {i} in {propertyName}.");
+                    break;
+                }
+                TValue value = valueReaderFunc(this, logFile);
+                if (value != null)
+                {
+                    map[key] = value;
+                }
+                else
+                {
+                    LogAction(logFile, $"Warning: Failed to read value for map entry {key} in {propertyName}.");
+                }
+            }
+            ParsedContent[propertyName] = map;
+            return map;
+        }
+
+        public Dictionary<Guid, TValue> ReadMapGuidToObject<TValue>(string propertyName, Func<SecNode, StreamWriter, TValue> valueReaderFunc, StreamWriter logFile)
+        {
+            LogAction(logFile, $"Reading MapGuidToObject for {propertyName}");
+            var map = new Dictionary<Guid, TValue>();
+            uint? count = ReadUInt32($"{propertyName}_count", logFile);
+            if (!count.HasValue)
+            {
+                LogAction(logFile, $"Error: Could not read count for map {propertyName}.");
+                ParsedContent[propertyName] = map; // Store empty map
+                return map;
+            }
+
+            for (int i = 0; i < count.Value; i++)
+            {
+                Guid? key = ReadGuid($"{propertyName}_Key{i}", logFile);
+                if (!key.HasValue)
+                {
+                    LogAction(logFile, $"Error: Could not read GUID key for map entry {i} in {propertyName}.");
+                    break;
+                }
+                TValue value = valueReaderFunc(this, logFile);
+                if (value != null) // valueReaderFunc should return null on failure
+                {
+                    map[key.Value] = value;
+                }
+                else
+                {
+                     LogAction(logFile, $"Warning: Failed to read value for map entry {key.Value} in {propertyName}.");
+                }
+            }
+            ParsedContent[propertyName] = map;
+            return map;
         }
     }
 }

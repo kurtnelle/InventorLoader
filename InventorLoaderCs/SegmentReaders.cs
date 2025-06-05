@@ -514,6 +514,14 @@ namespace InventorLoaderCs
             _dataReaderMethods["11FBECCD-B29E-4057-A277-75611C356307"] = Read_StyleDefinitions;
             _dataReaderMethods["A27E58F3-2452-4687-A07E-F69DECF97E6B"] = Read_ReferencedFiles;
             _dataReaderMethods["B080E131-F87B-4A7F-A0CE-B0E341018F37"] = Read_UnitsOfMeasure;
+
+            // New UIDs for RenderStyle and Material
+            _dataReaderMethods["F4B9C0A2-11D1-11D2-910F-0000F8061098"] = Read_RenderStyle;
+            _dataReaderMethods["F8A77A4E-11D1-11D2-910F-0000F8061098"] = Read_Material;
+
+            // UIDs for new AppReader methods
+            _dataReaderMethods["DAF73D46-B525-11D1-8D78-0008C75E7068"] = Read_DocumentSettings; // DocumentSettings
+            _dataReaderMethods["FB8BDD34-AA94-11D1-8D78-0008C75E7068"] = Read_ChangeManager;    // ChangeManager
         }
 
         public override void ReadSegmentData(byte[] segmentData, StreamWriter logFile)
@@ -585,6 +593,80 @@ namespace InventorLoaderCs
             node.ReadFloat64("LinearConversionFactor", Logger.LogWriter);
             node.ParsedContent["Summary"] = "Parsed Units Of Measure";
         }
+
+        // Corresponds to Python Read_F4B9C0A2 (RenderStyle)
+        private void Read_RenderStyle(SecNode node)
+        {
+            Logger.Info($"AppReader: Reading RenderStyle (UID: {node.Uid})");
+            // Python: self.ReadHeaderSU32S(node, 'RenderStyle')
+            ReadHeaderSU32S(node, "RenderStyle", Logger.LogWriter); // Base style header
+
+            node.ReadColorRgba("AmbientColor", Logger.LogWriter);    // ambient_color_
+            node.ReadColorRgba("DiffuseColor", Logger.LogWriter);    // diffuse_color_
+            node.ReadColorRgba("SpecularColor", Logger.LogWriter);   // specular_color_
+            node.ReadColorRgba("EmissiveColor", Logger.LogWriter);   // emissive_color_
+            node.ReadFloat32("Shininess", Logger.LogWriter);         // shininess_
+            node.ReadFloat32("Opacity", Logger.LogWriter);           // opacity_ (0.0 to 1.0)
+            node.ReadUInt32("HighlightStyle", Logger.LogWriter);    // highlight_style_ (enum placeholder)
+            node.ReadChildRef("TextureMapRef", Logger.LogWriter);    // texture_map_
+            node.ReadUInt32("TextureMapFlags", Logger.LogWriter);   // texture_map_flags_
+
+            node.ParsedContent["Summary"] = $"Parsed RenderStyle: Opacity={node.ParsedContent.GetValueOrDefault("Opacity", "N/A")}";
+        }
+
+        // Corresponds to Python Read_F8A77A4E (Material)
+        private void Read_Material(SecNode node)
+        {
+            Logger.Info($"AppReader: Reading Material (UID: {node.Uid})");
+            // Python: self.ReadHeaderSU32S(node, 'Material')
+            ReadHeaderSU32S(node, "Material", Logger.LogWriter); // Base style header
+
+            node.ReadLen32Text16("MaterialName", Logger.LogWriter);        // name_
+            node.ReadLen32Text16("MaterialDescription", Logger.LogWriter); // description_
+            // Python reads "type_" (string) and "attributes_" (crossRef) which might be part of ReadHeaderSU32S or specific here.
+            // Assuming ReadHeaderSU32S covers basic style attributes.
+            // If "type_" is specific to Material, it would be:
+            // node.ReadLen32Text16("MaterialType", Logger.LogWriter);
+
+            node.ParsedContent["Summary"] = $"Parsed Material: Name='{node.ParsedContent.GetValueOrDefault("MaterialName", "N/A")}'";
+        }
+
+        // Corresponds to Python Read_DAF73D46 (DocumentSettings)
+        private void Read_DocumentSettings(SecNode node)
+        {
+            Logger.Info($"AppReader: Reading DocumentSettings (UID: {node.Uid})");
+            // Python: self.ReadHeaderContent(node, 'DocumentSettings')
+            // ReadHeaderContent: Header0, Name, AttributesRef, NextContentRef
+            // Assuming a similar structure for AppReader or a more generic header.
+            node.ReadHeader0(Logger.LogWriter); // Basic header
+            node.ReadLen32Text16("SettingsName", Logger.LogWriter); // Placeholder for name
+
+            node.ReadBoolean("EnableAdaptiveStatus", Logger.LogWriter);    // enable_adaptive_status_
+            node.ReadBoolean("EnableRuntimeErrorChecking", Logger.LogWriter); // enable_runtime_error_checking_
+            node.ReadChildRef("UnitsOfMeasureRef", Logger.LogWriter);      // units_of_measure_
+            node.ReadChildRef("DefaultRenderStyleRef", Logger.LogWriter);  // default_render_style_
+            // Python has more fields like document_version_, active_detail_level_ etc.
+            // Adding a few more common ones:
+            node.ReadChildRef("ActiveDetailLevelRef", Logger.LogWriter);   // active_detail_level_
+            node.ReadChildRef("ActiveColorSchemeRef", Logger.LogWriter);   // active_color_scheme_
+
+            node.ParsedContent["Summary"] = $"Parsed DocumentSettings: Name='{node.ParsedContent.GetValueOrDefault("SettingsName", "N/A")}'";
+        }
+
+        // Corresponds to Python Read_FB8BDD34 (ChangeManager)
+        private void Read_ChangeManager(SecNode node)
+        {
+            Logger.Info($"AppReader: Reading ChangeManager (UID: {node.Uid})");
+            // Python: self.ReadHeaderSU32S(node, 'ChangeManager')
+            // ReadHeaderSU32S: Header0, StyleFlags (UInt32), StyleParentRef (ChildRef)
+            // This might not be a "Style" in the typical sense, but it reuses the header structure.
+            ReadHeaderSU32S(node, "ChangeManager", Logger.LogWriter);
+
+            node.ReadUInt32("ChangeStamp", Logger.LogWriter);           // change_stamp_
+            node.ReadLen32Text16("ManagerIdentifier", Logger.LogWriter); // manager_identifier_
+
+            node.ParsedContent["Summary"] = $"Parsed ChangeManager: Stamp='{node.ParsedContent.GetValueOrDefault("ChangeStamp", "N/A")}'";
+        }
     }
 
     public class BRepReader : SegmentReader
@@ -624,30 +706,106 @@ namespace InventorLoaderCs
         private void Read_AcisBinaryData(SecNode node)
         {
             Logger.Info($"BRepReader: Reading AcisBinaryData (UID: {node.Uid}) for segment {Segment.Name}");
-            node.ReadHeader0(Logger.LogWriter);
-            byte[] acisData = node.ReadBytes("AcisRawData", node.Size - (node.CurrentReadOffset - node.Offset), Logger.LogWriter);
-            node.ParsedContent["AcisDataSize"] = acisData?.Length ?? 0;
-            Logger.Info($"BRepReader: Stored reference to ACIS binary data, size: {acisData?.Length ?? 0}.");
+            node.ReadHeader0(Logger.LogWriter); // Assuming some header before ACIS data
+
+            // The rest of the node's data is the ACIS binary data
+            int acisDataOffset = node.CurrentReadOffset;
+            int acisDataSize = node.Offset + node.Size - acisDataOffset;
+
+            if (acisDataSize <= 0)
+            {
+                Logger.Error($"BRepReader: No ACIS binary data found after header for node {node.Uid}. Size: {acisDataSize}");
+                node.ParsedContent["ACIS_Error"] = "No data after header";
+                return;
+            }
+
+            byte[] acisData = new byte[acisDataSize];
+            Array.Copy(node.FullDataBuffer, acisDataOffset, acisData, 0, acisDataSize);
+
+            AcisReader acisReader = new AcisReader();
+            using (MemoryStream ms = new MemoryStream(acisData))
+            using (BinaryReader br = new BinaryReader(ms))
+            {
+                try
+                {
+                    bool success = acisReader.ReadBinary(br);
+                    if (success)
+                    {
+                        node.ParsedContent["ACIS"] = acisReader;
+                        Logger.Info($"BRepReader: Successfully parsed embedded ACIS binary data. Records: {acisReader.RecordsList.Count}");
+                    }
+                    else
+                    {
+                        Logger.Error($"BRepReader: Failed to parse embedded ACIS binary data for node {node.Uid}.");
+                        node.ParsedContent["ACIS_Error"] = "Parsing failed";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"BRepReader: Exception while parsing embedded ACIS binary data for node {node.Uid}: {ex.Message}\n{ex.StackTrace}");
+                    node.ParsedContent["ACIS_Error"] = $"Exception: {ex.Message}";
+                }
+            }
+            node.CurrentReadOffset = acisDataOffset + acisDataSize; // Advance past the ACIS data
         }
 
         private void Read_AcisTextData(SecNode node)
         {
             Logger.Info($"BRepReader: Reading AcisTextData (UID: {node.Uid}) for segment {Segment.Name}");
-            node.ReadHeader0(Logger.LogWriter);
-            string acisText = Encoding.ASCII.GetString(node.FullDataBuffer, node.CurrentReadOffset, node.Size - (node.CurrentReadOffset - node.Offset));
-            node.CurrentReadOffset = node.Offset + node.Size;
-            node.ParsedContent["AcisTextData"] = acisText;
-            node.ParsedContent["AcisTextDataLength"] = acisText.Length;
-            Logger.Info($"BRepReader: Stored ACIS text data, length: {acisText.Length}.");
+            node.ReadHeader0(Logger.LogWriter); // Assuming some header before ACIS data
+
+            int acisTextDataOffset = node.CurrentReadOffset;
+            int acisTextDataSize = node.Offset + node.Size - acisTextDataOffset;
+
+            if (acisTextDataSize <= 0)
+            {
+                Logger.Error($"BRepReader: No ACIS text data found after header for node {node.Uid}. Size: {acisTextDataSize}");
+                node.ParsedContent["ACIS_Error"] = "No data after header";
+                return;
+            }
+
+            // Get the raw byte array for the ACIS text data
+            byte[] acisTextBytes = new byte[acisTextDataSize];
+            Array.Copy(node.FullDataBuffer, acisTextDataOffset, acisTextBytes, 0, acisTextDataSize);
+
+            AcisReader acisReader = new AcisReader();
+            // Standard SAT files are typically ASCII or UTF-8. Using UTF-8 as a robust default.
+            using (MemoryStream ms = new MemoryStream(acisTextBytes))
+            using (StreamReader sr = new StreamReader(ms, Encoding.UTF8))
+            {
+                try
+                {
+                    bool success = acisReader.ReadText(sr);
+                    if (success)
+                    {
+                        node.ParsedContent["ACIS"] = acisReader;
+                        Logger.Info($"BRepReader: Successfully parsed embedded ACIS text data. Records: {acisReader.RecordsList.Count}");
+                    }
+                    else
+                    {
+                        Logger.Error($"BRepReader: Failed to parse embedded ACIS text data for node {node.Uid}.");
+                        node.ParsedContent["ACIS_Error"] = "Parsing failed";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"BRepReader: Exception while parsing embedded ACIS text data for node {node.Uid}: {ex.Message}\n{ex.StackTrace}");
+                    node.ParsedContent["ACIS_Error"] = $"Exception: {ex.Message}";
+                }
+            }
+            node.CurrentReadOffset = acisTextDataOffset + acisTextDataSize; // Advance past the ACIS data
         }
 
-        private void Read_D5E25341(SecNode node)
+        private void Read_D5E25341(SecNode node) // BRep Metadata / Properties
         {
-            Logger.Info($"BRepReader: Reading D5E25341 (UID: {node.Uid}) for segment {Segment.Name}");
-            node.ReadHeader0(Logger.LogWriter);
-            node.ReadUInt32("UnknownProp1_D5E25341", Logger.LogWriter);
-            node.ReadUInt32("UnknownProp2_D5E25341", Logger.LogWriter);
-            node.ParsedContent["Summary"] = "Parsed D5E25341 block";
+            Logger.Info($"BRepReader: Reading BRep Metadata D5E25341 (UID: {node.Uid}) for segment {Segment.Name}");
+            node.ReadHeader0(Logger.LogWriter); // Common header pattern for SecNode data
+            // Based on importerBRep.py Read_D5E25341, it reads two UInt32s.
+            node.ReadUInt32("PropertyCount", Logger.LogWriter); // Placeholder name, actual meaning might differ
+            node.ReadUInt32("Flags", Logger.LogWriter);         // Placeholder name
+            // Python code might also read a list of properties if PropertyCount > 0
+            // For now, keeping it simple to these two fields.
+            node.ParsedContent["Summary"] = "Parsed BRep Metadata D5E25341 block";
         }
     }
 
@@ -676,13 +834,16 @@ namespace InventorLoaderCs
             _dataReaderMethods["90874D94-11D0-D1F8-0008CABC0663DC09"] = Read_CoincidentConstraint2D;
 
             // Sketch Geometry UIDs (3D)
-            _dataReaderMethods["CE52DF3E-3DPT-4E82-8E3F-55A03A184489"] = Read_SketchPoint3D; // Placeholder UID for SketchPoint3D
+            _dataReaderMethods["CE52DF3E-3DPT-4E82-8E3F-55A03A184489"] = Read_SketchPoint3D;
             _dataReaderMethods["8EF06C89-11D1-11D2-910F-0000F8061098"] = Read_SketchLine3D;
             _dataReaderMethods["9E43716A-11D2-0FA5-6000-84B7B035C3B0"] = Read_SketchCircle3D;
 
             // Feature Definition UIDs
             _dataReaderMethods["90874D91-11D0-D1F8-0008CABC0663DC09"] = Read_Feature;
             _dataReaderMethods["729ABE28-11D1-11D2-910F-0000F8061098"] = Read_PartFeatureOperationEnum;
+
+            // PartComponentDefinition UID (placeholder - actual UID from importerDC.py Read_90874D63)
+            _dataReaderMethods["DC_PART_COMP_DEF_UID_PLACEHOLDER"] = Read_PartComponentDefinition;
         }
 
         public override void ReadSegmentData(byte[] segmentData, StreamWriter logFile)
@@ -947,6 +1108,28 @@ namespace InventorLoaderCs
             node.ParsedContent[$"{typeName}_HeaderProcessed"] = true;
         }
 
+        // Based on Python's ReadCntHdr3S
+        private void ReadHeaderCntHdr3S(SecNode node, string typeName, StreamWriter logFile)
+        {
+            Logger.Info($"DCReader: Reading CntHdr3S for '{typeName}' (UID: {node.Uid})");
+            node.ReadHeader0(logFile);
+            node.ReadUInt32("Count", logFile); // Typically the count of items in a following list
+            node.ReadChildRef("NextRef", logFile); // Reference to the next item or list header
+            node.ParsedContent[$"{typeName}_CntHdr3S_Processed"] = true;
+        }
+
+        // Based on Python's ReadHeaderContent
+        private void ReadHeaderContent(SecNode node, string typeName, StreamWriter logFile, string nextRefName = "NextContentRef")
+        {
+            Logger.Info($"DCReader: Reading HeaderContent for '{typeName}' (UID: {node.Uid})");
+            node.ReadHeader0(logFile);
+            node.ReadLen32Text16("Name", logFile);
+            node.ReadChildRef("AttributesRef", logFile);
+            node.ReadChildRef(nextRefName, logFile);
+            node.ParsedContent[$"{typeName}_HeaderContent_Processed"] = true;
+        }
+
+
         // Corresponds to Python Read_CE52DF3E (for Point3D - using new UID)
         private void Read_SketchPoint3D(SecNode node)
         {
@@ -1028,6 +1211,47 @@ namespace InventorLoaderCs
             node.ParsedContent["Summary"] = $"Parsed PartFeatureOperationEnum: Op='{node.ParsedContent.GetValueOrDefault("Operation", "N/A")}'";
         }
 
+        // Corresponds to Python Read_90874D63 (PartComponentDefinition)
+        private void Read_PartComponentDefinition(SecNode node)
+        {
+            Logger.Info($"DCReader: Reading PartComponentDefinition (UID: {node.Uid})");
+            node.ReadHeader0(Logger.LogWriter); // Or a more specific header if applicable
+
+            node.ReadChildRef("ref_1", Logger.LogWriter);
+            node.ReadChildRefList("objects", Logger.LogWriter);
+
+            // Parameters: map string to CrossRef (simplified to single CrossRef instead of list of CrossRef)
+            node.ReadMapStringToObject("parameters",
+                (n, log) => n.ReadCrossRef("ParameterValue", log) as object, // Cast to object for TValue
+                Logger.LogWriter);
+
+            node.ReadUInt32Array("a1", 2, Logger.LogWriter);
+
+            if (Version.IsGreaterOrEqualTo(2013,0,0)) // Python: self.version > 2012 (means 2013 onwards)
+            {
+                node.SkipBytes(4, Logger.LogWriter, "Version > 2012 skip for PartComponentDefinition");
+            }
+
+            node.ReadUInt32("index", Logger.LogWriter);
+            node.ReadUInt32("u32_0", Logger.LogWriter);
+
+            // lst1: map Guid to UInt32
+            node.ReadMapGuidToObject("lst1_mapGuidToUInt32",
+                (n,log) => n.ReadUInt32("MapValue_UInt32", log) as object, // Cast to object
+                Logger.LogWriter);
+
+            // lst2: map Guid to CrossRef
+            node.ReadMapGuidToObject("lst2_mapGuidToCrossRef",
+                (n, log) => n.ReadCrossRef("MapValue_CrossRef", log) as object, // Cast to object
+                Logger.LogWriter);
+
+            node.ReadCrossRef("ref_2", Logger.LogWriter);
+            node.ReadChildRefList("lst3", Logger.LogWriter);
+            node.ReadCrossRef("ref_3", Logger.LogWriter);
+
+            node.ParsedContent["Summary"] = "Parsed PartComponentDefinition";
+        }
+
 
         private void Read_PMxPartNode(SecNode node)
         {
@@ -1047,6 +1271,46 @@ namespace InventorLoaderCs
             node.ReadGuid("RefObjectGuid", Logger.LogWriter);
             node.ParsedContent["Summary"] = "Parsed UFRxRef";
         }
+
+        // Corresponds to Python Read_90874D64 (RDxRefPlane)
+        private void Read_RDxRefPlane(SecNode node)
+        {
+            Logger.Info($"DCReader: Reading RDxRefPlane (UID: {node.Uid})");
+            // Python: self.ReadHeaderObject(node, 'RDxRefPlane')
+            // ReadHeaderObject includes: name, crossRef (attributes), crossRef (parent_object)
+            // For now, using a simplified header read.
+            node.ReadHeader0(Logger.LogWriter);
+            node.ReadLen32Text16("PlaneName", Logger.LogWriter);
+            node.ReadChildRef("AttributesRef", Logger.LogWriter); // Placeholder for attributes
+            node.ReadChildRef("ParentObjectRef", Logger.LogWriter); // Placeholder for parent object
+
+            node.ReadUInt32("Flags", Logger.LogWriter); // flags_
+            node.ReadChildRef("OriginPointRef", Logger.LogWriter); // origin_pt_ (RDxPoint)
+            node.ReadChildRef("XAxisDirRef", Logger.LogWriter); // x_axis_dir_ (RDxDirection)
+            node.ReadChildRef("YAxisDirRef", Logger.LogWriter); // y_axis_dir_ (RDxDirection)
+            node.ReadBoolean("IsXReversed", Logger.LogWriter); // x_reversed_
+            node.ReadBoolean("IsYReversed", Logger.LogWriter); // y_reversed_
+            node.ReadBoolean("IsOffset", Logger.LogWriter);    // is_offset_
+            node.ReadFloat64("OffsetValue", Logger.LogWriter); // offset_ (RDxRealParameter) - simplified to double for now
+
+            node.ParsedContent["Summary"] = $"Parsed RDxRefPlane: Name='{node.ParsedContent.GetValueOrDefault("PlaneName", "N/A")}'";
+        }
+
+        // Corresponds to Python Read_90874D66 (RDxWorkAxis)
+        private void Read_RDxWorkAxis(SecNode node)
+        {
+            Logger.Info($"DCReader: Reading RDxWorkAxis (UID: {node.Uid})");
+            // Python: self.ReadHeaderObject(node, 'RDxWorkAxis')
+            node.ReadHeader0(Logger.LogWriter);
+            node.ReadLen32Text16("AxisName", Logger.LogWriter);
+            node.ReadChildRef("AttributesRef", Logger.LogWriter);
+            node.ReadChildRef("ParentObjectRef", Logger.LogWriter);
+
+            node.ReadChildRef("DefinitionRef", Logger.LogWriter); // definition_ (RDxWorkAxisDef)
+
+            node.ParsedContent["Summary"] = $"Parsed RDxWorkAxis: Name='{node.ParsedContent.GetValueOrDefault("AxisName", "N/A")}'";
+        }
+
     }
 
     public class DirectoryReader : SegmentReader

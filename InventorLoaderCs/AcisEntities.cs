@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.IO;
+using System.Linq; // Needed for Sum()
 
 namespace InventorLoaderCs
 {
@@ -27,6 +28,8 @@ namespace InventorLoaderCs
         public int Index => Record?.Index ?? -1;
         public string TypeName => Record?.Name ?? GetType().Name;
         public string SubtypeName { get; protected set; }
+        public int IndexInSubtypeList { get; set; } = -1;
+
 
         protected AcisEntity(string subtypeName = null)
         {
@@ -184,7 +187,7 @@ namespace InventorLoaderCs
         public Vector3 MajorAxisPoint { get; set; }
         public double Ratio { get; set; }
         public Interval CurveRange { get; set; }
-        public CurveEllipse() : base("ellipse-curve") { }
+        public CurveEllipse() : base("ellipse-curve") { /* Set Implemented */ }
         public override int Set(AcisRecord record)
         {
             base.Set(record);
@@ -224,14 +227,10 @@ namespace InventorLoaderCs
             Root = AcisParsingUtils.GetLocation(record, ref CurrentChunkIndex, header, "Root");
             Normal = AcisParsingUtils.GetVector(record, ref CurrentChunkIndex, "Normal");
             UvOrigin = AcisParsingUtils.GetLocation(record, ref CurrentChunkIndex, header, "UvOriginAsPoint");
-            // In Python, SurfacePlane uses SENSEV which maps to "forward_v" / "reversed_v".
-            // AcisParsingUtils.GetEnumByTag<SenseEnum> might need adjustment if SenseVEnum is different or strings don't match.
-            // For now, assuming SenseVEnum is compatible or GetEnumByTag handles it.
             string senseVStr = AcisParsingUtils.GetText(record, ref CurrentChunkIndex, "SenseV_String");
-            if (senseVStr.Equals("forward_v", StringComparison.OrdinalIgnoreCase)) SenseV = SenseEnum.FORWARD; // Map to existing SenseEnum
+            if (senseVStr.Equals("forward_v", StringComparison.OrdinalIgnoreCase)) SenseV = SenseEnum.FORWARD;
             else if (senseVStr.Equals("reversed_v", StringComparison.OrdinalIgnoreCase)) SenseV = SenseEnum.REVERSED;
             else SenseV = SenseEnum.UNKNOWN;
-
             URange = AcisParsingUtils.GetInterval(record, ref CurrentChunkIndex, header, double.NegativeInfinity, double.PositiveInfinity, "URange");
             VRange = AcisParsingUtils.GetInterval(record, ref CurrentChunkIndex, header, double.NegativeInfinity, double.PositiveInfinity, "VRange");
             return CurrentChunkIndex;
@@ -252,7 +251,7 @@ namespace InventorLoaderCs
         public Interval URange { get; set; }
         public Interval VRangeSlant { get; set; }
         public Vector3? Apex { get; private set; }
-        public SurfaceCone() : base("cone-surface") { }
+        public SurfaceCone() : base("cone-surface") { /* Set Implemented */ }
         public override int Set(AcisRecord record)
         {
             base.Set(record);
@@ -298,7 +297,7 @@ namespace InventorLoaderCs
         public Interval URange { get; set; }
         public Interval VRange { get; set; }
 
-        public SurfaceSphere() : base("sphere-surface") { }
+        public SurfaceSphere() : base("sphere-surface") { /* Set Implemented */ }
         public override int Set(AcisRecord record)
         {
             base.Set(record);
@@ -327,7 +326,7 @@ namespace InventorLoaderCs
         public Interval URange { get; set; }
         public Interval VRange { get; set; }
 
-        public SurfaceTorus() : base("torus-surface") { }
+        public SurfaceTorus() : base("torus-surface") { /* Set Implemented */ }
         public override int Set(AcisRecord record)
         {
             base.Set(record);
@@ -598,112 +597,280 @@ namespace InventorLoaderCs
     public class Wire : Topology { public Wire() : base("wire-entity") { } public override int Set(AcisRecord record) { base.Set(record); Logger.Warning($"Set method for {TypeName} not fully implemented."); return CurrentChunkIndex;} }
 
     // --- CurveInt and SurfaceSpline with Set methods and subtype dispatch ---
-    public class BSCurveData // Placeholder
-    {
-        public bool IsNurbs { get; set; }
-        public int Degree { get; set; }
-        public string ClosureType { get; set; }
-        public int KnotCount { get; set; }
-        // Add lists for poles, knots, weights etc. later
-    }
+    // BSCurveData and BSSurfaceData are now in ImporterClasses.cs
 
     public class CurveInt : Curve
     {
         public SenseEnum Sense { get; set; }
-        public string CurveSubtype { get; set; } // "ref", "exact_int_cur", etc.
+        public string CurveSubtypeString { get; set; } // Renamed from Subtype to avoid confusion with AcisEntity.SubtypeName
         public AcisEntity ReferencedCurve { get; set; }
-        public BSCurveData SplineDetails { get; set; }
+        public BSCurveData SplineGeometricData { get; set; }
+        public Law LawCurveData { get; set; }
+        public Helix HelixCurveData { get; set; }
 
         public CurveInt() : base("intcurve-curve") { }
 
         public override int Set(AcisRecord record)
         {
-            base.Set(record);
+            base.Set(record); // Sets CurrentChunkIndex via AcisEntity.Set
             var header = AcisGlobalUtils.GetReader()?.Header;
             if (header == null) { Logger.Error($"{TypeName}.Set: ACIS Header not available."); return CurrentChunkIndex; }
 
             Sense = AcisParsingUtils.GetEnumByTag<SenseEnum>(record, ref CurrentChunkIndex, "Sense");
-            // Subtype parsing in ACIS Text is: "intcurve-curve I I { subtype C C C... }"
-            // The actual subtype string ("ref", "exact_int_cur") is the first chunk inside the {}
-            // This means we need to check if the next chunk is a SubtypeOpen.
+
             if (Record.Chunks.Count > CurrentChunkIndex && Record.Chunks[CurrentChunkIndex] is AcisChunkSubtypeOpen)
             {
-                CurrentChunkIndex++; // Consume "{"
-                CurveSubtype = AcisParsingUtils.GetText(record, ref CurrentChunkIndex, "CurveInt.Subtype");
+                CurrentChunkIndex++;
+                CurveSubtypeString = AcisParsingUtils.GetText(record, ref CurrentChunkIndex, "CurveInt.Subtype");
+                Logger.Info($"{TypeName}.Set: subtype is {CurveSubtypeString} for record {Record.Name} #{Record.Index}");
 
-                switch (CurveSubtype)
+                switch (CurveSubtypeString)
                 {
                     case "ref":
                         int refId = AcisParsingUtils.GetInteger(record, ref CurrentChunkIndex, "ReferencedCurveID");
-                        ReferencedCurve = record.Reader.GetSubtypeEntity(refId); // Uses AcisReader instance from record
-                        if (ReferencedCurve != null) record.Reader.AddSubtypeEntity(ReferencedCurve); // Should this be done by CreateEntity?
+                        ReferencedCurve = record.Reader.GetSubtypeEntity(refId);
                         break;
                     case "exact_int_cur":
                         ParseExactIntCurve(record, ref CurrentChunkIndex, header);
                         break;
-                    // Add cases for other subtypes like "law_int_cur", "blend_int_cur" etc.
+                    case "law_int_cur":
+                        ParseLawIntCurve(record, ref CurrentChunkIndex, header);
+                        break;
+                    case "helix_int_cur":
+                        ParseHelixIntCurve(record, ref CurrentChunkIndex, header);
+                        break;
+                    case "comp_int_cur":
+                    case "defm_int_cur":
+                    case "spring_int_cur":
+                    case "off_int_cur":
+                    case "offset_int_cur":
+                    case "off_surf_int_cur":
+                    case "para_silh_int_cur":
+                    case "par_int_cur":
+                    case "proj_int_cur":
+                    case "surf_int_cur":
+                    case "int_int_cur":
+                    case "taper_silh_int_cur":
+                        Logger.Warning($"{TypeName}.Set: Parsing for subtype '{CurveSubtypeString}' is complex and deferred. Consuming remaining chunks in block.");
+                        while(CurrentChunkIndex < Record.Chunks.Count && !(Record.Chunks[CurrentChunkIndex] is AcisChunkSubtypeClose)) CurrentChunkIndex++;
+                        break;
                     default:
-                        Logger.Warning($"{TypeName}.Set: Unsupported subtype '{CurveSubtype}' for record {Record.Name} #{Record.Index}.");
-                        // Consume remaining chunks within subtype block until "}"
+                        Logger.Warning($"{TypeName}.Set: Unsupported subtype '{CurveSubtypeString}' for record {Record.Name} #{Record.Index}. Consuming remaining chunks in block.");
                         while(CurrentChunkIndex < Record.Chunks.Count && !(Record.Chunks[CurrentChunkIndex] is AcisChunkSubtypeClose)) CurrentChunkIndex++;
                         break;
                 }
-                if (CurrentChunkIndex < Record.Chunks.Count && Record.Chunks[CurrentChunkIndex] is AcisChunkSubtypeClose) CurrentChunkIndex++; // Consume "}"
-                else Logger.Warning($"{TypeName}.Set: Missing '}}' for subtype {CurveSubtype}. Record: {Record.Name} #{Record.Index}");
+                if (CurrentChunkIndex < Record.Chunks.Count && Record.Chunks[CurrentChunkIndex] is AcisChunkSubtypeClose) CurrentChunkIndex++;
+                else Logger.Warning($"{TypeName}.Set: Missing '}}' for subtype {CurveSubtypeString}. Record: {Record.Name} #{Record.Index}");
             }
             else
             {
-                Logger.Error($"{TypeName}.Set: Expected SubtypeOpen '{{' not found for record {Record.Name} #{Record.Index}.");
+                 Logger.Error($"{TypeName}.Set: Expected SubtypeOpen '{{' not found for record {Record.Name} #{Record.Index}. Chunk: {(Record.Chunks.Count > CurrentChunkIndex ? Record.Chunks[CurrentChunkIndex]?.Val.ToString() : "EOF")}");
             }
-            // After the subtype block, there's usually a range
-            if (CurrentChunkIndex < Record.Chunks.Count -1) // Ensure there are enough chunks for an interval
+
+            if (Record.Chunks.Count > CurrentChunkIndex + 1)
             {
-                 // CurveRange = AcisParsingUtils.GetInterval(record, ref CurrentChunkIndex, header, double.NegativeInfinity, double.PositiveInfinity, "CurveInt.Range");
-                 // The python code has self.range for CurveInt. For now, skipping.
+                // ParsedContent["CurveIntMainRange"] = AcisParsingUtils.GetInterval(record, ref CurrentChunkIndex, header, double.NegativeInfinity, double.PositiveInfinity, "CurveIntMainRange");
             }
             return CurrentChunkIndex;
         }
 
         private void ParseExactIntCurve(AcisRecord record, ref int chunkIndex, AcisHeader header)
         {
-            Logger.Info($"{TypeName}.ParseExactIntCurve: Parsing 'exact_int_cur' subtype.");
-            SplineDetails = new BSCurveData();
-            // Example from Python's CurveInt.setExact: reads singularity, then BS3Curve, then tolerance
-            // Python's setCurve (called by setExact): singularity, spline_data (BS3Curve), tolerance
-            string singularity = AcisParsingUtils.GetText(record, ref chunkIndex, "Singularity"); // Placeholder parsing
-            // Further parsing for BS3Curve data (GetDimensionCurve, GetClosureCurve, points, knots, weights)
-            // This is complex and deferred beyond basic dimension/closure.
-            AcisParsingUtils.GetDimensionCurve(record, ref chunkIndex, out SplineDetails.IsNurbs, out SplineDetails.Degree, "ExactIntCurve.Dimension");
-            AcisParsingUtils.GetClosureCurve(record, ref chunkIndex, out SplineDetails.ClosureType, out SplineDetails.KnotCount, "ExactIntCurve.Closure");
-            // Skip points, knots, weights for now
-            Logger.Warning($"{TypeName}.ParseExactIntCurve: Full BSpline data parsing (points, knots, weights) is deferred for 'exact_int_cur'.");
-            // Consume a placeholder number of chunks for the rest of BS3Curve and tolerance
-            // This needs to be refined based on actual ACIS structure for BS3Curve.
-            // For now, let's assume it might take up many chunks, so we try to find the end of this specific subtype's data
-            // or just log and don't advance chunkIndex much further within this helper.
+            Logger.Info($"{TypeName}.ParseExactIntCurve: Parsing 'exact_int_cur' subtype for record {Record.Name} #{Record.Index}");
+            SplineGeometricData = new BSCurveData();
+
+            string singularity = AcisParsingUtils.GetText(record, ref chunkIndex, "Singularity");
+
+            if (singularity.Equals("full", StringComparison.OrdinalIgnoreCase))
+            {
+                AcisParsingUtils.GetDimensionCurve(record, ref chunkIndex, out bool isNurbsTemp, out int degreeTemp, "ExactIntCurve.Dimension");
+                SplineGeometricData.IsRational = isNurbsTemp;
+                SplineGeometricData.Degree = degreeTemp;
+
+                AcisParsingUtils.GetClosureCurve(record, ref chunkIndex, out string closureTypeTemp, out int knotCountFromHeaderTemp, "ExactIntCurve.Closure");
+                SplineGeometricData.IsPeriodic = closureTypeTemp.Equals("periodic", StringComparison.OrdinalIgnoreCase);
+                // BSCurveData.KnotCountFromHeader = knotCountFromHeaderTemp; // Not directly on BSCurveData
+
+                if (!AcisParsingUtils.ReadKnotsAndMults(record, ref chunkIndex, knotCountFromHeaderTemp,
+                                                 out SplineGeometricData.Knots, out SplineGeometricData.Multiplicities, "ExactIntCurve.UKnots")) return;
+
+                if (SplineGeometricData.Multiplicities.Any())
+                {
+                     int expectedPoleCount = SplineGeometricData.Multiplicities.Sum() - SplineGeometricData.Degree - 1;
+                     if (SplineGeometricData.IsPeriodic) {
+                         expectedPoleCount = SplineGeometricData.Multiplicities.Take(SplineGeometricData.Multiplicities.Count-1).Sum();
+                     }
+                     AcisParsingUtils.AdjustKnotsAndMults(SplineGeometricData.Knots, SplineGeometricData.Multiplicities, SplineGeometricData.Degree);
+                     AcisParsingUtils.ReadPoints3DList(record, ref chunkIndex, header, SplineGeometricData, expectedPoleCount, "ExactIntCurve.Poles");
+                } else {
+                    Logger.Warning($"{TypeName}.ParseExactIntCurve: Multiplicities not populated, cannot calculate pole count for {Record.Name} #{Record.Index}");
+                }
+                if (record.Chunks.Count > chunkIndex)
+                {
+                    double tolerance = AcisParsingUtils.GetLength(record, ref chunkIndex, header, "ExactIntCurve.Tolerance");
+                }
+            }
+            else if (singularity.Equals("v", StringComparison.OrdinalIgnoreCase))
+            {
+                SplineGeometricData.IsRational = false;
+                SplineGeometricData.IsPeriodic = false;
+                SplineGeometricData.Degree = 3;
+                Logger.Warning($"{TypeName}.ParseExactIntCurve: Singularity 'v' with direct knot array reading not yet fully implemented for {Record.Name} #{Record.Index}.");
+            }
+            else Logger.Warning($"{TypeName}.ParseExactIntCurve: Singularity '{singularity}' not fully handled for {Record.Name} #{Record.Index}.");
+        }
+
+        private void ParseLawIntCurve(AcisRecord record, ref int chunkIndex, AcisHeader header)
+        {
+            Logger.Info($"{TypeName}.ParseLawIntCurve: Parsing 'law_int_cur' subtype for record {Record.Name} #{Record.Index}");
+            // Read the primary formula structure (main law string/type and its initial set of variable laws)
+            LawCurveData = AcisParsingUtils.ReadFormulaStructure(record, ref chunkIndex, header, "LawCurveData.FormulaStructure");
+
+            // After the formula-structure block, ACIS files for law_int_cur can have an additional list of laws.
+            // Python: self.vars += readLawList(chunks, i) -> readLawList reads count, then 'count' laws.
+            if (LawCurveData != null)
+            {
+                // Check if there are more chunks available for the count of additional laws
+                if (record.Chunks.Count > chunkIndex)
+                {
+                    int additionalLawCount = AcisParsingUtils.GetInteger(record, ref chunkIndex, "LawCurveData.AdditionalLawCount");
+                    for (int i = 0; i < additionalLawCount; i++)
+                    {
+                        Law additionalLaw = AcisParsingUtils.ReadLaw(record, ref chunkIndex, header, $"LawCurveData.AdditionalLaw{i}");
+                        if (additionalLaw != null)
+                        {
+                            LawCurveData.Parameters.Add(additionalLaw);
+                        }
+                        else
+                        {
+                            Logger.Error($"{TypeName}.ParseLawIntCurve: Failed to parse additional law {i} for record {Record.Name} #{Record.Index}");
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    Logger.Info($"{TypeName}.ParseLawIntCurve: No more chunks after FormulaStructure for additional laws. Record: {Record.Name} #{Record.Index}");
+                }
+            }
+            else
+            {
+                Logger.Error($"{TypeName}.ParseLawIntCurve: Failed to parse main FormulaStructure. Record: {Record.Name} #{Record.Index}");
+            }
+        }
+
+        private void ParseHelixIntCurve(AcisRecord record, ref int chunkIndex, AcisHeader header)
+        {
+            Logger.Info($"{TypeName}.ParseHelixIntCurve: Parsing 'helix_int_cur' subtype for record {Record.Name} #{Record.Index}");
+            HelixCurveData = AcisParsingUtils.ReadHelixData(record, ref chunkIndex, header, "HelixCurveData");
+
+            HelixCurveData.ProjectionSurface1 = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "Helix.ProjectionSurface1", "surface-entity") as Surface;
+
+            string pcurve1DimType = AcisParsingUtils.GetText(record, ref chunkIndex, "Helix.PCurve1DimTypeCheck");
+            if (pcurve1DimType != null && !pcurve1DimType.Equals("nullbs", StringComparison.OrdinalIgnoreCase))
+            {
+                chunkIndex--;
+                HelixCurveData.ProjectionPCurve1 = new BSCurveData();
+                AcisParsingUtils.GetDimensionCurve(record, ref chunkIndex, out bool isNurbs1, out int degree1, "Helix.PCurve1Dim");
+                HelixCurveData.ProjectionPCurve1.IsRational = isNurbs1;
+                HelixCurveData.ProjectionPCurve1.Degree = degree1;
+
+                AcisParsingUtils.GetClosureCurve(record, ref chunkIndex, out string closure1, out int knotCount1, "Helix.PCurve1Closure");
+                HelixCurveData.ProjectionPCurve1.IsPeriodic = closure1.Equals("periodic", StringComparison.OrdinalIgnoreCase);
+
+                if (!AcisParsingUtils.ReadKnotsAndMults(record, ref chunkIndex, knotCount1,
+                                                 out HelixCurveData.ProjectionPCurve1.Knots,
+                                                 out HelixCurveData.ProjectionPCurve1.Multiplicities, "Helix.PCurve1Knots"))
+                {
+                    Logger.Error($"{TypeName}.ParseHelixIntCurve: Failed to read knots/mults for PCurve1. Record: {Record.Name} #{Record.Index}");
+                    HelixCurveData.ProjectionPCurve1 = null;
+                }
+                else
+                {
+                    if (HelixCurveData.ProjectionPCurve1.Multiplicities.Any())
+                    {
+                        int expectedPoleCount1 = HelixCurveData.ProjectionPCurve1.Multiplicities.Sum() - HelixCurveData.ProjectionPCurve1.Degree - 1;
+                        if (HelixCurveData.ProjectionPCurve1.IsPeriodic)
+                        {
+                            expectedPoleCount1 = HelixCurveData.ProjectionPCurve1.Multiplicities.Take(HelixCurveData.ProjectionPCurve1.Multiplicities.Count -1).Sum();
+                        }
+
+                        AcisParsingUtils.AdjustKnotsAndMults(HelixCurveData.ProjectionPCurve1.Knots, HelixCurveData.ProjectionPCurve1.Multiplicities, HelixCurveData.ProjectionPCurve1.Degree);
+                        if (!AcisParsingUtils.ReadPoints2DList(record, ref chunkIndex, header, HelixCurveData.ProjectionPCurve1, expectedPoleCount1, "Helix.PCurve1Poles"))
+                        {
+                             Logger.Error($"{TypeName}.ParseHelixIntCurve: Failed to read poles for PCurve1. Record: {Record.Name} #{Record.Index}");
+                             HelixCurveData.ProjectionPCurve1 = null;
+                        }
+                    } else {
+                        Logger.Warning($"{TypeName}.ParseHelixIntCurve: PCurve1 Multiplicities not populated for {Record.Name} #{Record.Index}");
+                        HelixCurveData.ProjectionPCurve1 = null;
+                    }
+                }
+            } else if (pcurve1DimType == null) {
+                 Logger.Warning($"{TypeName}.ParseHelixIntCurve: Expected dimension type for PCurve1 (e.g., 'nubs', 'nurbs', 'nullbs'), but found nothing. Record: {Record.Name} #{Record.Index}");
+            }
+
+            HelixCurveData.ProjectionSurface2 = AcisParsingUtils.GetRefNode(record, ref CurrentChunkIndex, "Helix.ProjectionSurface2", "surface-entity") as Surface;
+
+            string pcurve2DimType = AcisParsingUtils.GetText(record, ref chunkIndex, "Helix.PCurve2DimTypeCheck");
+            if (pcurve2DimType != null && !pcurve2DimType.Equals("nullbs", StringComparison.OrdinalIgnoreCase))
+            {
+                chunkIndex--;
+                HelixCurveData.ProjectionPCurve2 = new BSCurveData();
+                AcisParsingUtils.GetDimensionCurve(record, ref chunkIndex, out bool isNurbs2, out int degree2, "Helix.PCurve2Dim");
+                HelixCurveData.ProjectionPCurve2.IsRational = isNurbs2;
+                HelixCurveData.ProjectionPCurve2.Degree = degree2;
+
+                AcisParsingUtils.GetClosureCurve(record, ref chunkIndex, out string closure2, out int knotCount2, "Helix.PCurve2Closure");
+                HelixCurveData.ProjectionPCurve2.IsPeriodic = closure2.Equals("periodic", StringComparison.OrdinalIgnoreCase);
+
+                if (!AcisParsingUtils.ReadKnotsAndMults(record, ref chunkIndex, knotCount2,
+                                                 out HelixCurveData.ProjectionPCurve2.Knots,
+                                                 out HelixCurveData.ProjectionPCurve2.Multiplicities, "Helix.PCurve2Knots"))
+                {
+                     Logger.Error($"{TypeName}.ParseHelixIntCurve: Failed to read knots/mults for PCurve2. Record: {Record.Name} #{Record.Index}");
+                     HelixCurveData.ProjectionPCurve2 = null;
+                }
+                else
+                {
+                     if (HelixCurveData.ProjectionPCurve2.Multiplicities.Any())
+                    {
+                        int expectedPoleCount2 = HelixCurveData.ProjectionPCurve2.Multiplicities.Sum() - HelixCurveData.ProjectionPCurve2.Degree - 1;
+                         if (HelixCurveData.ProjectionPCurve2.IsPeriodic)
+                        {
+                            expectedPoleCount2 = HelixCurveData.ProjectionPCurve2.Multiplicities.Take(HelixCurveData.ProjectionPCurve2.Multiplicities.Count-1).Sum();
+                        }
+
+                        AcisParsingUtils.AdjustKnotsAndMults(HelixCurveData.ProjectionPCurve2.Knots, HelixCurveData.ProjectionPCurve2.Multiplicities, HelixCurveData.ProjectionPCurve2.Degree);
+                        if(!AcisParsingUtils.ReadPoints2DList(record, ref chunkIndex, header, HelixCurveData.ProjectionPCurve2, expectedPoleCount2, "Helix.PCurve2Poles"))
+                        {
+                            Logger.Error($"{TypeName}.ParseHelixIntCurve: Failed to read poles for PCurve2. Record: {Record.Name} #{Record.Index}");
+                            HelixCurveData.ProjectionPCurve2 = null;
+                        }
+                    } else {
+                        Logger.Warning($"{TypeName}.ParseHelixIntCurve: PCurve2 Multiplicities not populated for {Record.Name} #{Record.Index}");
+                        HelixCurveData.ProjectionPCurve2 = null;
+                    }
+                }
+            } else if (pcurve2DimType == null) {
+                Logger.Warning($"{TypeName}.ParseHelixIntCurve: Expected dimension type for PCurve2, but found nothing. Record: {Record.Name} #{Record.Index}");
+            }
         }
     }
 
-    public class BSSurfaceData // Placeholder
-    {
-        public bool IsNurbs { get; set; }
-        public int UDegree { get; set; }
-        public int VDegree { get; set; }
-        public string UClosure { get; set; }
-        public string VClosure { get; set; }
-        public string USingularity { get; set; }
-        public string VSingularity { get; set; }
-        public int UKnotCount { get; set; }
-        public int VKnotCount { get; set; }
-        // Add lists for poles, knots, weights etc. later
-    }
+    // BSSurfaceData is now in ImporterClasses.cs
 
     public class SurfaceSpline : Surface
     {
         public SenseEnum Sense { get; set; }
-        public string SurfaceSubtype { get; set; } // "ref", "spl_sur", etc.
+        public string SurfaceSubtype { get; set; }
         public AcisEntity ReferencedSurface { get; set; }
-        public BSSurfaceData SplineDetails { get; set; }
+        public BSSurfaceData SplineGeometricData { get; set; }
+        public Curve ProfileCurve { get; set; }
+        public Vector3 AxisVector { get; set; }
+        public Vector3 CenterPoint { get; set; }
+        public Vector3 DirectionVector { get; set; }
+
 
         public SurfaceSpline() : base("spline-surface") { }
 
@@ -717,20 +884,25 @@ namespace InventorLoaderCs
 
             if (Record.Chunks.Count > CurrentChunkIndex && Record.Chunks[CurrentChunkIndex] is AcisChunkSubtypeOpen)
             {
-                CurrentChunkIndex++; // Consume "{"
+                CurrentChunkIndex++;
                 SurfaceSubtype = AcisParsingUtils.GetText(record, ref CurrentChunkIndex, "SurfaceSpline.Subtype");
+                Logger.Info($"{TypeName}.Set: subtype is {SurfaceSubtype} for record {Record.Name} #{Record.Index}");
 
                 switch (SurfaceSubtype)
                 {
                     case "ref":
                         int refId = AcisParsingUtils.GetInteger(record, ref CurrentChunkIndex, "ReferencedSurfaceID");
                         ReferencedSurface = record.Reader.GetSubtypeEntity(refId);
-                        if (ReferencedSurface != null) record.Reader.AddSubtypeEntity(ReferencedSurface);
                         break;
-                    case "spl_sur": // This is one of the common ones from Python SurfaceSpline.setSurfaceShape
+                    case "spl_sur":
                         ParseSplineSurfaceProper(record, ref CurrentChunkIndex, header);
                         break;
-                    // Add cases for "cyl_spl_sur", "off_spl_sur", "rot_spl_sur", "sum_spl_sur", etc.
+                    case "cyl_spl_sur":
+                        ParseCylSplineSurface(record, ref CurrentChunkIndex, header);
+                        break;
+                    case "rot_spl_sur":
+                        ParseRotSplineSurface(record, ref CurrentChunkIndex, header);
+                        break;
                     default:
                         Logger.Warning($"{TypeName}.Set: Unsupported subtype '{SurfaceSubtype}' for record {Record.Name} #{Record.Index}.");
                         while(CurrentChunkIndex < Record.Chunks.Count && !(Record.Chunks[CurrentChunkIndex] is AcisChunkSubtypeClose)) CurrentChunkIndex++;
@@ -741,57 +913,339 @@ namespace InventorLoaderCs
             }
             else
             {
-                 Logger.Error($"{TypeName}.Set: Expected SubtypeOpen '{{' not found for record {Record.Name} #{Record.Index}.");
-            }
-            // After the subtype block, there's usually URange and VRange
-             if (CurrentChunkIndex < Record.Chunks.Count - 3) // Ensure there are enough for two intervals
-            {
-                // URange = AcisParsingUtils.GetInterval(record, ref CurrentChunkIndex, header, double.NegativeInfinity, double.PositiveInfinity, "SurfaceSpline.URange");
-                // VRange = AcisParsingUtils.GetInterval(record, ref CurrentChunkIndex, header, double.NegativeInfinity, double.PositiveInfinity, "SurfaceSpline.VRange");
-                // Skipping for now as Python setSubtype handles this after specific subtype parsing
+                 Logger.Error($"{TypeName}.Set: Expected SubtypeOpen '{{' not found for record {Record.Name} #{Record.Index}. Chunk: {(Record.Chunks.Count > CurrentChunkIndex ? Record.Chunks[CurrentChunkIndex]?.Val : "EOF")}");
             }
             return CurrentChunkIndex;
         }
 
         private void ParseSplineSurfaceProper(AcisRecord record, ref int chunkIndex, AcisHeader header)
         {
-            Logger.Info($"{TypeName}.ParseSplineSurfaceProper: Parsing 'spl_sur' subtype.");
-            SplineDetails = new BSSurfaceData();
-            // Python: self.spline, self.tolerance, i = readSplineSurface(chunks, index, True)
-            // readSplineSurface -> singularity, then BS3Surface or other data, then tolerance
-            string singularity = AcisParsingUtils.GetText(record, ref chunkIndex, "Singularity"); // Placeholder
-            // This is highly complex, involving GetDimensionSurface, GetClosureSurface, and then point/knot/weight lists.
-            AcisParsingUtils.GetDimensionSurface(record, ref chunkIndex, out SplineDetails.IsNurbs, out SplineDetails.UDegree, out SplineDetails.VDegree, "SplineSurface.Dimension");
-            AcisParsingUtils.GetClosureSurface(record, ref chunkIndex,
-                out SplineDetails.UClosure, out SplineDetails.VClosure,
-                out SplineDetails.USingularity, out SplineDetails.VSingularity,
-                out SplineDetails.UKnotCount, out SplineDetails.VKnotCount, "SplineSurface.Closure");
+            Logger.Info($"{TypeName}.ParseSplineSurfaceProper: Parsing 'spl_sur' data for record {Record.Name} #{Record.Index}");
+            SplineGeometricData = new BSSurfaceData();
 
-            Logger.Warning($"{TypeName}.ParseSplineSurfaceProper: Full BSpline surface data parsing (points, knots, weights) is deferred for 'spl_sur'.");
-            // Potentially read tolerance if version >= 2.0 after discontinuity info
+            string singularity = AcisParsingUtils.GetText(record, ref chunkIndex, "SplineSurface.Singularity");
+            SplineGeometricData.USingularity = singularity;
+
+            AcisParsingUtils.GetDimensionSurface(record, ref chunkIndex, out bool isNurbsTemp,
+                                               out int uDegreeTemp, out int vDegreeTemp, "SplineSurface.Dimension");
+            SplineGeometricData.URational = isNurbsTemp; // Assuming IsRational applies to U for BSSurfaceData
+            SplineGeometricData.VRational = isNurbsTemp; // Assuming IsRational applies to V for BSSurfaceData
+            SplineGeometricData.UDegree = uDegreeTemp;
+            SplineGeometricData.VDegree = vDegreeTemp;
+
+            AcisParsingUtils.GetClosureSurface(record, ref chunkIndex,
+                out string uClosureTemp, out string vClosureTemp,
+                out SplineGeometricData.USingularity, out SplineGeometricData.VSingularity, // These might be different from the first singularity
+                out int uKnotCountFromHeaderTemp, out int vKnotCountFromHeaderTemp, "SplineSurface.Closure");
+
+            SplineGeometricData.UPeriodic = uClosureTemp.Equals("periodic", StringComparison.OrdinalIgnoreCase);
+            SplineGeometricData.VPeriodic = vClosureTemp.Equals("periodic", StringComparison.OrdinalIgnoreCase);
+            // SplineGeometricData.UKnotCountFromHeader = uKnotCountFromHeaderTemp; // Not on BSSurfaceData
+            // SplineGeometricData.VKnotCountFromHeader = vKnotCountFromHeaderTemp; // Not on BSSurfaceData
+
+            AcisParsingUtils.ReadKnotsAndMults(record, ref chunkIndex, uKnotCountFromHeaderTemp,
+                                             out SplineGeometricData.UKnots, out SplineGeometricData.UMultiplicities, "SplineSurface.UKnots");
+            AcisParsingUtils.ReadKnotsAndMults(record, ref chunkIndex, vKnotCountFromHeaderTemp,
+                                             out SplineGeometricData.VKnots, out SplineGeometricData.VMultiplicities, "SplineSurface.VKnots");
+
+            if (SplineGeometricData.UMultiplicities.Any() && SplineGeometricData.VMultiplicities.Any())
+            {
+                AcisParsingUtils.AdjustKnotsAndMults(SplineGeometricData.UKnots, SplineGeometricData.UMultiplicities, SplineGeometricData.UDegree);
+                AcisParsingUtils.AdjustKnotsAndMults(SplineGeometricData.VKnots, SplineGeometricData.VMultiplicities, SplineGeometricData.VDegree);
+
+                int expectedUPoleCount = SplineGeometricData.UMultiplicities.Sum() - SplineGeometricData.UDegree - 1;
+                int expectedVPoleCount = SplineGeometricData.VMultiplicities.Sum() - SplineGeometricData.VDegree - 1;
+                if (SplineGeometricData.UPeriodic) expectedUPoleCount = SplineGeometricData.UMultiplicities.Take(SplineGeometricData.UMultiplicities.Count-1).Sum();
+                if (SplineGeometricData.VPeriodic) expectedVPoleCount = SplineGeometricData.VMultiplicities.Take(SplineGeometricData.VMultiplicities.Count-1).Sum();
+
+                AcisParsingUtils.ReadPoints3DSurface(record, ref chunkIndex, header, SplineGeometricData,
+                                                   expectedUPoleCount, expectedVPoleCount, "SplineSurface.Poles");
+            } else {
+                 Logger.Warning($"{TypeName}.ParseSplineSurfaceProper: UMultiplicities or VMultiplicities not populated, cannot calculate pole count for {Record.Name} #{Record.Index}");
+            }
+            Logger.Warning($"{TypeName}.ParseSplineSurfaceProper: DiscontinuityInfo and Tolerance parsing is deferred for 'spl_sur'.");
+        }
+
+        private void ParseCylSplineSurface(AcisRecord record, ref int chunkIndex, AcisHeader header)
+        {
+            Logger.Info($"{TypeName}.ParseCylSplineSurface: Parsing 'cyl_spl_sur' subtype for record {Record.Name} #{Record.Index}");
+            ProfileCurve = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "ProfileCurve", "curve-entity") as Curve;
+            AxisVector = AcisParsingUtils.GetVector(record, ref chunkIndex, "AxisVector");
+            CenterPoint = AcisParsingUtils.GetLocation(record, ref chunkIndex, header, "CenterPoint");
+            ParseSplineSurfaceProper(record, ref chunkIndex, header);
+        }
+
+        private void ParseRotSplineSurface(AcisRecord record, ref int chunkIndex, AcisHeader header)
+        {
+            Logger.Info($"{TypeName}.ParseRotSplineSurface: Parsing 'rot_spl_sur' subtype for record {Record.Name} #{Record.Index}");
+            ProfileCurve = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "ProfileCurve", "curve-entity") as Curve;
+            CenterPoint = AcisParsingUtils.GetLocation(record, ref chunkIndex, header, "LocationPoint");
+            DirectionVector = AcisParsingUtils.GetVector(record, ref chunkIndex, "DirectionVector");
+            ParseSplineSurfaceProper(record, ref chunkIndex, header);
         }
     }
 
-    public class SurfaceCone : Surface { public SurfaceCone() : base("cone-surface") { /* Set Implemented in previous step */ } }
-    public class CurveEllipse : Curve { public CurveEllipse() : base("ellipse-curve") { /* Set Implemented in previous step */ } }
+    // public class SurfaceCone : Surface { public SurfaceCone() : base("cone-surface") { /* Set Implemented */ } } // Already defined with Set
+    // public class CurveEllipse : Curve { public CurveEllipse() : base("ellipse-curve") { /* Set Implemented */ } } // Already defined with Set
+    // public class SurfaceSphere : Surface { public SurfaceSphere() : base("sphere-surface") { /* Set Implemented */ } } // Already defined with Set
+    // public class SurfaceTorus : Surface { public SurfaceTorus() : base("torus-surface") { /* Set Implemented */ } } // Already defined with Set
 
     public class CurveComp : Curve { public CurveComp() : base("compcurv-curve") { } public override int Set(AcisRecord rec){ base.Set(rec); Logger.Warning($"Set for {TypeName} NI"); return CurrentChunkIndex;} }
     public class CurveDegenerate : Curve { public CurveDegenerate() : base("degenerate-curve") { } public override int Set(AcisRecord rec){ base.Set(rec); Logger.Warning($"Set for {TypeName} NI"); return CurrentChunkIndex;} }
     // CurveInt implemented above
     public class CurveIntInt : Curve { public CurveIntInt() : base("intcurve-intcurve-curve") { } public override int Set(AcisRecord rec){ base.Set(rec); Logger.Warning($"Set for {TypeName} NI"); return CurrentChunkIndex;} }
-    public class CurveP : Curve { public CurveP() : base("pcurve-curve") { } public override int Set(AcisRecord rec){ base.Set(rec); Logger.Warning($"Set for {TypeName} NI"); return CurrentChunkIndex;} }
+
+    public class CurveP : Curve
+    {
+        public int PcurveType { get; set; }
+        public SenseEnum Sense { get; set; }
+        public string PcurveSubtypeString { get; set; }
+
+        public AcisEntity ReferencedPCurveEntity { get; set; }
+
+        public BSCurveData PcurveSplineData { get; set; }
+        public double Tolerance { get; set; }
+        public Surface SurfaceForExppc { get; set; }
+
+        public Curve CurveForTypeNot0 { get; set; }
+        public double UParam { get; set; }
+        public double VParam { get; set; }
+
+        public CurveP() : base("pcurve-curve") { }
+
+        public override int Set(AcisRecord record)
+        {
+            base.Set(record);
+            var header = AcisGlobalUtils.GetReader()?.Header;
+            if (header == null) { Logger.Error($"{TypeName}.Set: ACIS Header not available."); return CurrentChunkIndex; }
+
+            PcurveType = AcisParsingUtils.GetInteger(record, ref CurrentChunkIndex, "PcurveType");
+
+            if (PcurveType == 0)
+            {
+                ParsePSubtype(record, ref CurrentChunkIndex, header);
+            }
+            else
+            {
+                CurveForTypeNot0 = AcisParsingUtils.GetRefNode(record, ref CurrentChunkIndex, "CurveForTypeNot0", "curve-entity") as Curve;
+                UParam = AcisParsingUtils.GetFloat(record, ref CurrentChunkIndex, "UParam");
+                VParam = AcisParsingUtils.GetFloat(record, ref CurrentChunkIndex, "VParam");
+                Logger.Info($"{TypeName}.Set: Parsed direct curve reference with U={UParam}, V={VParam}.");
+            }
+            return CurrentChunkIndex;
+        }
+
+        private void ParsePSubtype(AcisRecord record, ref int chunkIndex, AcisHeader header)
+        {
+            Sense = AcisParsingUtils.GetEnumByTag<SenseEnum>(record, ref chunkIndex, "Sense");
+
+            if (Record.Chunks.Count > chunkIndex && Record.Chunks[chunkIndex] is AcisChunkSubtypeOpen)
+            {
+                chunkIndex++;
+                PcurveSubtypeString = AcisParsingUtils.GetText(record, ref chunkIndex, "Pcurve.SubtypeString");
+                Logger.Info($"{TypeName}.ParsePSubtype: subtype is {PcurveSubtypeString} for record {Record.Name} #{Record.Index}");
+
+                switch (PcurveSubtypeString?.ToLowerInvariant())
+                {
+                    case "ref":
+                        int refId = AcisParsingUtils.GetInteger(record, ref chunkIndex, "ReferencedPCurveID");
+                        ReferencedPCurveEntity = record.Reader.GetSubtypeEntity(refId);
+                        break;
+                    case "exppc":
+                    case "exp_par_cur":
+                        PcurveSplineData = new BSCurveData();
+                        AcisParsingUtils.GetDimensionCurve(record, ref chunkIndex, out PcurveSplineData.IsRational, out PcurveSplineData.Degree, "PcurveDim");
+                        AcisParsingUtils.GetClosureCurve(record, ref chunkIndex, out string closureType,
+                                                        // out PcurveSplineData.KnotCountFromHeader, // Not on BSCurveData
+                                                        out int knotCount, // Use local var
+                                                        "PcurveClosure");
+                        PcurveSplineData.IsPeriodic = closureType.Equals("periodic", StringComparison.OrdinalIgnoreCase);
+
+                        if (!AcisParsingUtils.ReadKnotsAndMults(record, ref chunkIndex, knotCount,
+                                                         out PcurveSplineData.Knots, out PcurveSplineData.Multiplicities, "PcurveKnots"))
+                            { Logger.Error("Failed to read pcurve knots and mults."); break; }
+
+                        if (PcurveSplineData.Multiplicities.Any())
+                        {
+                            int expectedPoleCount = PcurveSplineData.Multiplicities.Sum() - PcurveSplineData.Degree - 1;
+                            if (PcurveSplineData.IsPeriodic) expectedPoleCount = PcurveSplineData.Multiplicities.Take(PcurveSplineData.Multiplicities.Count-1).Sum();
+
+                            AcisParsingUtils.AdjustKnotsAndMults(PcurveSplineData.Knots, PcurveSplineData.Multiplicities, PcurveSplineData.Degree);
+                            if(!AcisParsingUtils.ReadPoints2DList(record, ref chunkIndex, header, PcurveSplineData, expectedPoleCount, "PcurvePoles"))
+                                { Logger.Error("Failed to read pcurve 2D poles."); break; }
+                        } else { Logger.Warning($"{TypeName}.ParsePSubtype (exppc): Multiplicities not populated for {Record.Name} #{Record.Index}"); }
+
+                        Tolerance = AcisParsingUtils.GetFloat(record, ref chunkIndex, "Tolerance");
+
+                        bool isAsm = header.Format?.StartsWith("ASM") ?? false;
+                        if (header.Version > 11.0 && !isAsm) {
+                            if(Record.Chunks.Count > chunkIndex) chunkIndex++;
+                            else Logger.Warning($"{TypeName}.ParsePSubtype (exppc): Not enough chunks for version skip.");
+                        }
+
+                        SurfaceForExppc = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "SurfaceForExppc", "surface-entity") as Surface;
+                        break;
+                    case "imppc":
+                    case "imp_par_cur":
+                        Logger.Info($"{TypeName}.ParsePSubtype: Attempting to parse embedded CurveInt for 'imppc' subtype.");
+                        Logger.Warning("imppc/imp_par_cur pcurve subtype parsing is complex and deferred. Skipping conceptual block.");
+                        AcisParsingUtils.GetRefNode(record, ref chunkIndex, "EmbeddedCurveIntRef_Placeholder");
+                        break;
+                    default:
+                        Logger.Warning($"{TypeName}.ParsePSubtype: Unsupported pcurve subtype '{PcurveSubtypeString}' for record {Record.Name} #{Record.Index}.");
+                        while(chunkIndex < Record.Chunks.Count && !(Record.Chunks[chunkIndex] is AcisChunkSubtypeClose)) chunkIndex++;
+                        break;
+                }
+                if (chunkIndex < Record.Chunks.Count && Record.Chunks[chunkIndex] is AcisChunkSubtypeClose) chunkIndex++;
+                else Logger.Warning($"{TypeName}.ParsePSubtype: Missing '}}' for subtype {PcurveSubtypeString}. Record: {Record.Name} #{Record.Index}");
+            }
+            else { Logger.Error($"{TypeName}.ParsePSubtype: Expected SubtypeOpen '{{' not found after Sense. Current chunk: {(Record.Chunks.Count > chunkIndex ? Record.Chunks[CurrentChunkIndex].Val.ToString() : "EOF")}"); }
+        }
+    }
     public class SurfaceMesh : Surface { public SurfaceMesh() : base("meshsurf-surface") { } public override int Set(AcisRecord rec){ base.Set(rec); Logger.Warning($"Set for {TypeName} NI"); return CurrentChunkIndex;} }
-    public class SurfaceSphere : Surface { public SurfaceSphere() : base("sphere-surface") { /* Set Implemented in previous step */ } }
-    // SurfaceSpline implemented above
-    public class SurfaceTorus : Surface { public SurfaceTorus() : base("torus-surface") { /* Set Implemented in previous step */ } }
 
     public class Attrib : Attributes { public Attrib() : base("attrib-attrib") { } }
-    public class AttribADesk : Attributes { public AttribADesk() : base("adesk-attrib") { } }
-    public class AttribADeskColor : AttribADesk { public AttribADeskColor() : base("color-adesk-attrib") { } }
-    public class AttribADeskMaterial : AttribADesk { public AttribADeskMaterial() : base("material-adesk-attrib") { } }
-    public class AttribADeskTrueColor : AttribADesk { public AttribADeskTrueColor() : base("truecolor-adesk-attrib") { } }
-    public class AttribGen : Attributes { public AttribGen() : base("gen-attrib") { } }
-    public class AttribGenName : AttribGen { public AttribGenName() : base("name_attrib-gen-attrib") { } }
+
+    public class AttribADesk : Attributes
+    {
+        public AttribADesk() : base("adesk-attrib") { }
+        public AttribADesk(string subtype) : base(subtype) { } // Allow derived to set specific subtype
+        public override int Set(AcisRecord record)
+        {
+            return base.Set(record); // Base Attributes.Set handles common fields
+        }
+    }
+
+    public class AttribADeskColor : AttribADesk
+    {
+        public double Red { get; set; } public double Green { get; set; } public double Blue { get; set; }
+        public AttribADeskColor() : base("color-adesk-attrib") { }
+        public override int Set(AcisRecord record)
+        {
+            base.Set(record);
+            // Example: Read color if specific format is known for this non-truecolor version
+            Logger.Warning($"Set for {TypeName} (ADeskColor) needs specific parsing if any.");
+            return CurrentChunkIndex;
+        }
+    }
+    public class AttribADeskMaterial : AttribADesk
+    {
+        public AttribADeskMaterial() : base("material-adesk-attrib") { }
+        public override int Set(AcisRecord record)
+        {
+            base.Set(record);
+            Logger.Warning($"Set for {TypeName} (ADeskMaterial) needs specific parsing if any.");
+            return CurrentChunkIndex;
+        }
+    }
+
+    public class AttribADeskTrueColor : AttribADesk
+    {
+        public byte Alpha { get; set; }
+        public byte Red { get; set; }
+        public byte Green { get; set; }
+        public byte Blue { get; set; }
+        public AttribADeskTrueColor() : base("truecolor-adesk-attrib") { }
+        public override int Set(AcisRecord record)
+        {
+            base.Set(record);
+            int rgbaInt = AcisParsingUtils.GetInteger(record, ref CurrentChunkIndex, "RGBA_Integer");
+            Alpha = (byte)((rgbaInt >> 24) & 0xFF);
+            Red = (byte)((rgbaInt >> 16) & 0xFF);
+            Green = (byte)((rgbaInt >> 8) & 0xFF);
+            Blue = (byte)(rgbaInt & 0xFF);
+            return CurrentChunkIndex;
+        }
+    }
+
+    public class AttribGen : Attributes
+    {
+        public AttribGen() : base("gen-attrib") { }
+        public AttribGen(string subtype) : base(subtype) { }
+        public override int Set(AcisRecord record)
+        {
+            return base.Set(record);
+        }
+    }
+
+    public class AttribGenName : AttribGen
+    {
+        public string Text { get; set; }
+        public AttribGenName() : base("name_attrib-gen-attrib") { }
+        public override int Set(AcisRecord record)
+        {
+            base.Set(record);
+            var header = AcisGlobalUtils.GetReader()?.Header;
+            if (header == null) { Logger.Error($"{TypeName}.Set: ACIS Header not available."); return CurrentChunkIndex; }
+            bool isAsm = header.Format?.StartsWith("ASM") ?? false;
+
+            if (header.Version < 16.0 || isAsm)
+            {
+                Logger.Info($"{TypeName}.Set: Skipping 4 chunks for version < 16 or ASM model.");
+                for(int k=0; k<4 && Record.Chunks.Count > CurrentChunkIndex; ++k) CurrentChunkIndex++;
+            }
+            if (Record.Chunks.Count > CurrentChunkIndex)
+                Text = AcisParsingUtils.GetText(record, ref CurrentChunkIndex, "TextValue");
+            else
+                Logger.Warning($"{TypeName}.Set: Not enough chunks to read TextValue for {Record.Name} #{Record.Index}");
+            return CurrentChunkIndex;
+        }
+    }
+    public class AttribStRgbColor : Attributes
+    {
+        public double Red { get; set; }
+        public double Green { get; set; }
+        public double Blue { get; set; }
+        public AttribStRgbColor() : base("rgb_color-st-attrib"){}
+        public override int Set(AcisRecord record)
+        {
+            base.Set(record);
+            Red = AcisParsingUtils.GetFloat(record, ref CurrentChunkIndex, "Red");
+            Green = AcisParsingUtils.GetFloat(record, ref CurrentChunkIndex, "Green");
+            Blue = AcisParsingUtils.GetFloat(record, ref CurrentChunkIndex, "Blue");
+            return CurrentChunkIndex;
+        }
+    }
+
+    // Naming Attributes
+    public class AttribNamingMatching : Attributes // Base for NMX specific attributes
+    {
+        public AttribNamingMatching() : base("matching_criteria-nmx-attrib") { } // Default subtype
+        public AttribNamingMatching(string subtype) : base(subtype) { } // Allow derived to set specific subtype
+
+        public override int Set(AcisRecord record)
+        {
+            return base.Set(record); // Handles common attribute fields
+        }
+    }
+
+    public class AttribNamingMatchingNMxFFColorEntity : AttribNamingMatching
+    {
+        public List<int> IntParams { get; set; }
+        public string EntityName { get; set; }
+        public List<Tuple<int, int>> DcIndexMappings { get; set; }
+
+        public AttribNamingMatchingNMxFFColorEntity() : base("nmx_ff_color_entity_matching_criteria-nmx-attrib")
+        {
+            IntParams = new List<int>();
+            DcIndexMappings = new List<Tuple<int, int>>();
+        }
+
+        public override int Set(AcisRecord record)
+        {
+            base.Set(record); // Call Attributes.Set via AttribNamingMatching.Set
+
+            // Parse 2 integers
+            IntParams.Add(AcisParsingUtils.GetInteger(record, ref CurrentChunkIndex, "IntParam1"));
+            IntParams.Add(AcisParsingUtils.GetInteger(record, ref CurrentChunkIndex, "IntParam2"));
+
+            EntityName = AcisParsingUtils.GetText(record, ref CurrentChunkIndex, "EntityName");
+
+            DcIndexMappings = AcisParsingUtils.GetDcIndexMappings(record, ref CurrentChunkIndex, "DcIndexMappings");
+
+            return CurrentChunkIndex;
+        }
+    }
 
     public class UnknownAcisEntity : AcisEntity
     {
