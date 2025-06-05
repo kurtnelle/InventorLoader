@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Text;
@@ -9,108 +8,107 @@ namespace InventorLoaderCs
     {
         // Mathematical Constants
         public const double MIN_0 = 0.0;
-        public const double MIN_PI = -Math.PI;
-        public const double MIN_PI2 = -Math.PI / 2.0;
+        public const double MIN_PI = -System.Math.PI;
+        public const double MIN_PI2 = -System.Math.PI / 2.0;
         public const double MIN_INF = double.NegativeInfinity;
-        public const double MAX_2PI = 2.0 * Math.PI;
-        public const double MAX_PI = Math.PI;
-        public const double MAX_PI2 = Math.PI / 2.0;
+        public const double MAX_2PI = System.Math.PI * 2.0;
+        public const double MAX_PI = System.Math.PI;
+        public const double MAX_PI2 = System.Math.PI / 2.0;
         public const double MAX_INF = double.PositiveInfinity;
-        public const double MAX_LEN = 1.0e12; // Arbitrary large length
-        public const double EPS = 1.0e-9;   // Epsilon for comparisons
+        public const double MAX_LEN = 1.0e12;
+        public const double EPS = 1.0e-9;
 
         // Direction Vectors
-        public static readonly Vector3 CENTER = Vector3.Zero;
-        public static readonly Vector3 DIR_X = Vector3.UnitX;
-        public static readonly Vector3 DIR_Y = Vector3.UnitY;
-        public static readonly Vector3 DIR_Z = Vector3.UnitZ;
+        public static readonly Vector3 CENTER = new Vector3(0.0f, 0.0f, 0.0f);
+        public static readonly Vector3 DIR_X = new Vector3(1.0f, 0.0f, 0.0f);
+        public static readonly Vector3 DIR_Y = new Vector3(0.0f, 1.0f, 0.0f);
+        public static readonly Vector3 DIR_Z = new Vector3(0.0f, 0.0f, 1.0f);
 
         // Encoding
         public static readonly Encoding ENCODING_FS = Encoding.UTF8;
 
-        // Reference Types
+        // Other Constants (Mapped to int or potentially an enum later if beneficial)
         public const int REF_CROSS = 0;
         public const int REF_CHILD = 1;
         public const int REF_PARENT = 2;
+        public const int REF_NEXT = 3;
+        public const int REF_PREV = 4;
+        public const int REF_START = 5;
+        public const int REF_END = 6;
+        public const int REF_FIRST = 7;
+        public const int REF_LAST = 8;
+        public const int REF_OTHER = 9;
+        public const int REF_PARTNER = 10;
 
-        // Value Types Enum
-        public enum ValueType : int
-        {
-            VAL_GUESS = 0,
-            VAL_UINT8 = 1,
-            VAL_SINT16 = 2,
-            VAL_UINT16 = 3,
-            VAL_SINT32 = 4,
-            VAL_UINT32 = 5,
-            VAL_SINT64 = 6,
-            VAL_UINT64 = 7,
-            VAL_FLOAT32 = 8,
-            VAL_FLOAT64 = 9,
-            VAL_TEXT_ID = 10, // Special case for text IDs
-            VAL_BLOB_ID = 11, // Special case for BLOB IDs
-            VAL_UNKNOWN = 12,
-            VAL_NT_ENTRY = 13,
-            VAL_COLOR_RGBA = 14,
-            VAL_VEC_3D = 15,
-            VAL_VEC_2D = 16,
-            VAL_MAT_3D = 17,
-            VAL_MAT_2D = 18,
-            VAL_GUID = 19,
-            VAL_TIME = 20,
-            VAL_LEN_32_TEXT_8 = 21,
-            VAL_LEN_32_TEXT_16 = 22,
-            VAL_BOOL_8 = 23,
-            VAL_ENUM_16 = 24,
-            VAL_ENUM_32 = 25,
-            VAL_MAP_GUID_TO_OBJECT = 26,
-            VAL_MAP_STRING_TO_OBJECT = 27,
-            VAL_CHILD_REF_LIST = 28,
-            VAL_ARR_SINT32 = 29,
-            VAL_ARR_FLOAT64 = 30,
-            VAL_ARR_GUID = 31,
-            VAL_ARR_ENUM_16 = 32,
-            VAL_ARR_CHILD_REF = 33,
-            VAL_ARR_LEN_32_TEXT_16 = 34,
-            VAL_UNKNOWN_LEN_32 = 35
-        }
+        public const int VAL_GUESS = 0;
+        public const int VAL_UINT8 = 1;
+        public const int VAL_INT16 = 2;
+        public const int VAL_INT32 = 3;
+        public const int VAL_FLOAT = 4;
+        public const int VAL_DOUBLE = 5;
+        public const int VAL_STR = 6;
+        public const int VAL_LIST = 7;
+        public const int VAL_REF = 8;
+        public const int VAL_BOOL = 9;
+        public const int VAL_ENUM = 10;
+        public const int VAL_BINARY = 11;
+        public const int VAL_UNKNOWN = 12;
 
-        // Value Type Format Mapping
+        // VAL_FORMAT Dictionary
         public static readonly Dictionary<int, string> VAL_FORMAT = new Dictionary<int, string>
         {
-            { (int)ValueType.VAL_GUESS, "?" },
-            { (int)ValueType.VAL_UINT8, "B" },    // Unsigned char (1 byte)
-            { (int)ValueType.VAL_SINT16, "h" },   // Short (2 bytes)
-            { (int)ValueType.VAL_UINT16, "H" },   // Unsigned short (2 bytes)
-            { (int)ValueType.VAL_SINT32, "i" },   // Int (4 bytes)
-            { (int)ValueType.VAL_UINT32, "I" },   // Unsigned int (4 bytes)
-            { (int)ValueType.VAL_SINT64, "q" },   // Long long (8 bytes)
-            { (int)ValueType.VAL_UINT64, "Q" },   // Unsigned long long (8 bytes)
-            { (int)ValueType.VAL_FLOAT32, "f" }, // Float (4 bytes)
-            { (int)ValueType.VAL_FLOAT64, "d" }, // Double (8 bytes)
-            // VAL_TEXT_ID, VAL_BLOB_ID, VAL_UNKNOWN are special and don't have simple struct format strings
-            { (int)ValueType.VAL_NT_ENTRY, "NtEntry" }, // Custom structure
-            { (int)ValueType.VAL_COLOR_RGBA, "ColorRgba" }, // Custom structure
-            { (int)ValueType.VAL_VEC_3D, "Vector3d" }, // Custom structure
-            { (int)ValueType.VAL_VEC_2D, "Vector2d" }, // Custom structure
-            { (int)ValueType.VAL_MAT_3D, "Matrix3d" }, // Custom structure
-            { (int)ValueType.VAL_MAT_2D, "Matrix2d" }, // Custom structure
-            { (int)ValueType.VAL_GUID, "Guid" }, // Custom structure (16 bytes)
-            { (int)ValueType.VAL_TIME, "DateTime" }, // Custom structure (FILETIME, 8 bytes)
-            { (int)ValueType.VAL_LEN_32_TEXT_8, "Len32Text8" }, // Custom
-            { (int)ValueType.VAL_LEN_32_TEXT_16, "Len32Text16" }, // Custom
-            { (int)ValueType.VAL_BOOL_8, "b" }, // Actually bool, but read as byte
-            { (int)ValueType.VAL_ENUM_16, "H" }, // Read as unsigned short
-            { (int)ValueType.VAL_ENUM_32, "I" }, // Read as unsigned int
-            { (int)ValueType.VAL_MAP_GUID_TO_OBJECT, "MapGuidToObject" }, // Custom
-            { (int)ValueType.VAL_MAP_STRING_TO_OBJECT, "MapStringToObject" }, // Custom
-            { (int)ValueType.VAL_CHILD_REF_LIST, "ChildRefList" }, // Custom
-            { (int)ValueType.VAL_ARR_SINT32, "ArraySInt32" }, // Custom
-            { (int)ValueType.VAL_ARR_FLOAT64, "ArrayFloat64" }, // Custom
-            { (int)ValueType.VAL_ARR_GUID, "ArrayGuid" }, // Custom
-            { (int)ValueType.VAL_ARR_ENUM_16, "ArrayEnum16" }, // Custom
-            { (int)ValueType.VAL_ARR_CHILD_REF, "ArrayChildRef" }, // Custom
-            { (int)ValueType.VAL_ARR_LEN_32_TEXT_16, "ArrayLen32Text16" }, // Custom
-            { (int)ValueType.VAL_UNKNOWN_LEN_32, "UnknownLen32" } // Custom
+            { VAL_GUESS, "?" },
+            { VAL_UINT8, "B" },
+            { VAL_INT16, "h" },
+            { VAL_INT32, "i" },
+            { VAL_FLOAT, "f" },
+            { VAL_DOUBLE, "d" },
+            { VAL_STR, "s" },
+            { VAL_LIST, "L" },
+            { VAL_REF, "R" },
+            { VAL_BOOL, "b" },
+            { VAL_ENUM, "E" },
+            { VAL_BINARY, "X" }
         };
+
+        public const int MAX_STR_LEN = 255;
+        public const int MAX_SMALL_STR_LEN = 31;
+        public const int OBJ_HEADER_LEN = 10;
+
+        public const int OBJ_UNKNOWN = 0;
+        public const int OBJ_HEADER = 1;
+        public const int OBJ_VALUE = 2;
+        public const int OBJ_PROP = 3;
+        public const int OBJ_GEO = 4;
+        public const int OBJ_REL = 5;
+        public const int OBJ_GROUP = 6;
+        public const int OBJ_XPROP = 7;
+
+        public const int GEO_UNKNOWN = 0;
+        public const int GEO_POINT = 1;
+        public const int GEO_LINE = 2;
+        public const int GEO_PLANE = 3;
+        public const int GEO_CIRCLE = 4;
+        public const int GEO_CONIC = 5;
+        public const int GEO_CURVE = 6;
+        public const int GEO_SURFACE = 7;
+        public const int GEO_SOLID = 8;
+        public const int GEO_GROUP = 9;
+
+        public const int REL_UNKNOWN = 0;
+        public const int REL_REF = 1;
+        public const int REL_DIM = 2;
+        public const int REL_TAN = 3;
+        public const int REL_PARA = 4;
+        public const int REL_PERP = 5;
+
+        public const int GRP_UNKNOWN = 0;
+        public const int GRP_ASS = 1;
+        public const int GRP_BODY = 2;
+        public const int GRP_SHELL = 3;
+        public const int GRP_FACE = 4;
+        public const int GRP_LOOP = 5;
+        public const int GRP_EDGE = 6;
+        public const int GRP_VERTEX = 7;
     }
 }

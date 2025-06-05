@@ -98,18 +98,44 @@ namespace InventorLoaderCs
     // --- Core Geometric and Topological STEP Entities ---
     public class CartesianPoint : StepNamedEntity // CARTESIAN_POINT
     {
-        public List<double> Coordinates { get; set; }
-        public CartesianPoint(string name, List<double> coordinates) : base(name) { Coordinates = coordinates; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Z { get; set; }
+        // Constructor taking individual coordinates
+        public CartesianPoint(string name, double x, double y, double z) : base(name)
+        {
+            X = x; Y = y; Z = z;
+        }
+        // Keep constructor taking List<double> for compatibility if used elsewhere, or remove if not.
+        public CartesianPoint(string name, List<double> coordinates) : base(name)
+        {
+            if (coordinates == null || coordinates.Count != 3) throw new ArgumentException("Coordinates list must contain 3 values.");
+            X = coordinates[0]; Y = coordinates[1]; Z = coordinates[2];
+        }
         public override string GetClassName() => "CARTESIAN_POINT";
-        public override List<object> GetParameters() => new List<object> { Name, Coordinates };
+        public override List<object> GetParameters() => new List<object> { Name, new List<double> { X, Y, Z } };
     }
 
     public class Direction : StepNamedEntity // DIRECTION
     {
-        public List<double> Ratios { get; set; }
-        public Direction(string name, List<double> ratios) : base(name) { Ratios = ratios; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Z { get; set; }
+        // Constructor taking individual ratios
+        public Direction(string name, double x, double y, double z) : base(name)
+        {
+            // Ratios should ideally be normalized, but STEP doesn't strictly enforce for DIRECTION components.
+            // Normalization is usually handled by the CreateDirection util.
+            X = x; Y = y; Z = z;
+        }
+        // Keep constructor taking List<double> for compatibility or remove.
+        public Direction(string name, List<double> ratios) : base(name)
+        {
+            if (ratios == null || ratios.Count != 3) throw new ArgumentException("Ratios list must contain 3 values.");
+            X = ratios[0]; Y = ratios[1]; Z = ratios[2];
+        }
         public override string GetClassName() => "DIRECTION";
-        public override List<object> GetParameters() => new List<object> { Name, Ratios };
+        public override List<object> GetParameters() => new List<object> { Name, new List<double> { X, Y, Z } };
     }
 
     public class Vector : StepNamedEntity // VECTOR
@@ -238,16 +264,16 @@ namespace InventorLoaderCs
     {
         public int Degree { get; set; }
         public List<CartesianPoint> ControlPointsList { get; set; }
-        public string CurveForm { get; set; } // e.g. .POLYLINE_FORM.
-        public bool ClosedCurve { get; set; }
-        public bool SelfIntersect { get; set; }
+        public StepEnumWrapper CurveForm { get; set; }
+        public bool ClosedCurve { get; set; } // LOGICAL in STEP, .T. .F.
+        public bool SelfIntersect { get; set; } // LOGICAL in STEP
         public List<int> KnotMultiplicities { get; set; }
         public List<double> Knots { get; set; }
-        public string KnotSpec { get; set; } // e.g. .UNSPECIFIED.
+        public StepEnumWrapper KnotSpec { get; set; }
 
         public BSplineCurveWithKnots(string name, int degree, List<CartesianPoint> controlPoints,
-                                     string form, bool closed, bool selfIntersect,
-                                     List<int> mults, List<double> knots, string spec) : base(name)
+                                     StepEnumWrapper form, bool closed, bool selfIntersect,
+                                     List<int> mults, List<double> knots, StepEnumWrapper spec) : base(name)
         {
             Degree = degree; ControlPointsList = controlPoints; CurveForm = form;
             ClosedCurve = closed; SelfIntersect = selfIntersect; KnotMultiplicities = mults;
@@ -255,7 +281,7 @@ namespace InventorLoaderCs
         }
         public override string GetClassName() => "B_SPLINE_CURVE_WITH_KNOTS";
         public override List<object> GetParameters() => new List<object> { Name, Degree, ControlPointsList,
-            new StepEnumWrapper(CurveForm), ClosedCurve, SelfIntersect, KnotMultiplicities, Knots, new StepEnumWrapper(KnotSpec) };
+            CurveForm, ClosedCurve, SelfIntersect, KnotMultiplicities, Knots, KnotSpec };
     }
 
     // Wrapper for enums that should be exported like .ENUM_VALUE.
@@ -283,6 +309,27 @@ namespace InventorLoaderCs
         { Position = pos; Radius = radius; }
         public override string GetClassName() => "CYLINDRICAL_SURFACE";
         public override List<object> GetParameters() => new List<object> { Name, Position, Radius };
+    }
+
+    public class Circle : StepNamedEntity // CIRCLE
+    {
+        public Axis2Placement3D Position { get; set; }
+        public double Radius { get; set; }
+        public Circle(string name, Axis2Placement3D pos, double radius) : base(name)
+        { Position = pos; Radius = radius; }
+        public override string GetClassName() => "CIRCLE";
+        public override List<object> GetParameters() => new List<object> { Name, Position, Radius };
+    }
+
+    public class Ellipse : StepNamedEntity // ELLIPSE
+    {
+        public Axis2Placement3D Position { get; set; }
+        public double SemiAxis1 { get; set; } // Major radius
+        public double SemiAxis2 { get; set; } // Minor radius
+        public Ellipse(string name, Axis2Placement3D pos, double semiAxis1, double semiAxis2) : base(name)
+        { Position = pos; SemiAxis1 = semiAxis1; SemiAxis2 = semiAxis2; }
+        public override string GetClassName() => "ELLIPSE";
+        public override List<object> GetParameters() => new List<object> { Name, Position, SemiAxis1, SemiAxis2 };
     }
 
     public class ConicalSurface : StepNamedEntity // CONICAL_SURFACE
@@ -321,8 +368,8 @@ namespace InventorLoaderCs
     {
         public List<double> WeightsData { get; set; }
         public RationalBSplineCurve(string name, int degree, List<CartesianPoint> controlPoints,
-                                    string form, bool closed, bool selfIntersect,
-                                    List<int> mults, List<double> knots, string spec,
+                                    StepEnumWrapper form, bool closed, bool selfIntersect,
+                                    List<int> mults, List<double> knots, StepEnumWrapper spec,
                                     List<double> weights)
             : base(name, degree, controlPoints, form, closed, selfIntersect, mults, knots, spec)
         {
@@ -342,19 +389,19 @@ namespace InventorLoaderCs
         public int UDegree { get; set; }
         public int VDegree { get; set; }
         public List<List<CartesianPoint>> ControlPointsList { get; set; } // List of lists (rows of points)
-        public string SurfaceForm { get; set; } // e.g. .PLANE_SURF.
+        public StepEnumWrapper SurfaceForm { get; set; }
         public bool UClosed { get; set; }
         public bool VClosed { get; set; }
-        public bool SelfIntersect { get; set; } // Note: STEP schema uses LOGICAL, not BOOLEAN for this often.
+        public bool SelfIntersect { get; set; }
         public List<int> UMultiplicities { get; set; }
         public List<int> VMultiplicities { get; set; }
         public List<double> UKnots { get; set; }
         public List<double> VKnots { get; set; }
-        public string KnotSpec { get; set; } // e.g. .UNSPECIFIED.
+        public StepEnumWrapper KnotSpec { get; set; }
 
         public BSplineSurfaceWithKnots(string name, int uDegree, int vDegree, List<List<CartesianPoint>> controlPoints,
-                                       string form, bool uClosed, bool vClosed, bool selfIntersect,
-                                       List<int> uMults, List<int> vMults, List<double> uKnots, List<double> vKnots, string spec)
+                                       StepEnumWrapper form, bool uClosed, bool vClosed, bool selfIntersect,
+                                       List<int> uMults, List<int> vMults, List<double> uKnots, List<double> vKnots, StepEnumWrapper spec)
             : base(name)
         {
             UDegree = uDegree; VDegree = vDegree; ControlPointsList = controlPoints; SurfaceForm = form;
@@ -364,9 +411,9 @@ namespace InventorLoaderCs
 
         public override string GetClassName() => "B_SPLINE_SURFACE_WITH_KNOTS";
         public override List<object> GetParameters() => new List<object> {
-            Name, UDegree, VDegree, ControlPointsList, new StepEnumWrapper(SurfaceForm),
+            Name, UDegree, VDegree, ControlPointsList, SurfaceForm,
             UClosed, VClosed, SelfIntersect,
-            UMultiplicities, VMultiplicities, UKnots, VKnots, new StepEnumWrapper(KnotSpec)
+            UMultiplicities, VMultiplicities, UKnots, VKnots, KnotSpec
         };
     }
 
@@ -375,8 +422,8 @@ namespace InventorLoaderCs
         public List<List<double>> WeightsData { get; set; } // Grid of weights
 
         public RationalBSplineSurface(string name, int uDegree, int vDegree, List<List<CartesianPoint>> controlPoints,
-                                      string form, bool uClosed, bool vClosed, bool selfIntersect,
-                                      List<int> uMults, List<int> vMults, List<double> uKnots, List<double> vKnots, string spec,
+                                      StepEnumWrapper form, bool uClosed, bool vClosed, bool selfIntersect,
+                                      List<int> uMults, List<int> vMults, List<double> uKnots, List<double> vKnots, StepEnumWrapper spec,
                                       List<List<double>> weights)
             : base(name, uDegree, vDegree, controlPoints, form, uClosed, vClosed, selfIntersect, uMults, vMults, uKnots, vKnots, spec)
         {
@@ -407,6 +454,55 @@ namespace InventorLoaderCs
         public override string GetClassName() => "SHELL_BASED_SURFACE_MODEL";
         public override List<object> GetParameters() => new List<object> { Name, SbsmElements };
     }
+
+    // --- Style & Presentation Entities ---
+    public class ColourRgb : StepNamedEntity // COLOUR_RGB (actually just COLOUR)
+    {
+        public double Red { get; set; }
+        public double Green { get; set; }
+        public double Blue { get; set; }
+        public ColourRgb(string name, double r, double g, double b) : base(name)
+        { Red = r; Green = g; Blue = b; } // Values 0-1 for STEP
+        public override string GetClassName() => "COLOUR_RGB"; // This is the entity type name
+        public override List<object> GetParameters() => new List<object> { Name, Red, Green, Blue };
+    }
+
+    public class SurfaceStyleFillArea : StepEntity // SURFACE_STYLE_FILL_AREA
+    {
+        public ColourRgb FillArea { get; set; }
+        public SurfaceStyleFillArea(ColourRgb fillColour) : base() { FillArea = fillColour; }
+        public override string GetClassName() => "SURFACE_STYLE_FILL_AREA";
+        public override List<object> GetParameters() => new List<object> { FillArea };
+    }
+
+    public class SurfaceStyleUsage : StepEntity // SURFACE_STYLE_USAGE
+    {
+        public StepEnumWrapper Side { get; set; } // .BOTH., .POSITIVE., .NEGATIVE.
+        public StepEntity Style { get; set; } // e.g. SurfaceStyleFillArea
+        public SurfaceStyleUsage(StepEnumWrapper side, StepEntity style) : base()
+        { Side = side; Style = style; }
+        public override string GetClassName() => "SURFACE_STYLE_USAGE";
+        public override List<object> GetParameters() => new List<object> { Side, Style };
+    }
+
+    public class PresentationStyleAssignment : StepEntity // PRESENTATION_STYLE_ASSIGNMENT
+    {
+        public List<StepEntity> Styles { get; set; } // List of (e.g. SurfaceStyleUsage)
+        public PresentationStyleAssignment(List<StepEntity> styles) : base() { Styles = styles; }
+        public override string GetClassName() => "PRESENTATION_STYLE_ASSIGNMENT";
+        public override List<object> GetParameters() => new List<object> { Styles };
+    }
+
+    public class StyledItem : StepNamedEntity // STYLED_ITEM
+    {
+        public List<StepEntity> Styles { get; set; } // List of PresentationStyleAssignment
+        public StepEntity Item { get; set; } // The item being styled (e.g., AdvancedFace)
+        public StyledItem(string name, List<StepEntity> styles, StepEntity item) : base(name)
+        { Styles = styles; Item = item; }
+        public override string GetClassName() => "STYLED_ITEM";
+        public override List<object> GetParameters() => new List<object> { Name, Styles, Item };
+    }
+
 
     // Minimal STEP file structure entities
     public class FileDescription : StepEntity
@@ -450,22 +546,31 @@ namespace InventorLoaderCs
         private static Dictionary<string, VertexPoint> _vertexPoints = new Dictionary<string, VertexPoint>();
         private static Dictionary<string, EdgeCurve> _edgeCurves = new Dictionary<string, EdgeCurve>();
         private static Dictionary<string, OrientedEdge> _orientedEdges = new Dictionary<string, OrientedEdge>();
-
-        // New caches for additional entities
-        private static Dictionary<string, Axis2Placement3D> _axis2Placements = new Dictionary<string, Axis2Placement3D>();
-        private static Dictionary<string, Plane> _planes = new Dictionary<string, Plane>();
-        private static Dictionary<string, CylindricalSurface> _cylindricalSurfaces = new Dictionary<string, CylindricalSurface>();
-        private static Dictionary<string, ConicalSurface> _conicalSurfaces = new Dictionary<string, ConicalSurface>();
-        private static Dictionary<string, SphericalSurface> _sphericalSurfaces = new Dictionary<string, SphericalSurface>();
-        private static Dictionary<string, ToroidalSurface> _toroidalSurfaces = new Dictionary<string, ToroidalSurface>();
-        private static Dictionary<string, BSplineCurveWithKnots> _bSplineCurves = new Dictionary<string, BSplineCurveWithKnots>(); // Also for RationalBSplineCurve
-        private static Dictionary<string, BSplineSurfaceWithKnots> _bSplineSurfaces = new Dictionary<string, BSplineSurfaceWithKnots>(); // Also for RationalBSplineSurface
         private static Dictionary<string, EdgeLoop> _edgeLoops = new Dictionary<string, EdgeLoop>();
         private static Dictionary<string, FaceBound> _faceBounds = new Dictionary<string, FaceBound>();
         private static Dictionary<string, AdvancedFace> _advancedFaces = new Dictionary<string, AdvancedFace>();
         private static Dictionary<string, OpenShell> _openShells = new Dictionary<string, OpenShell>(); // Includes ClosedShell
         private static Dictionary<string, ManifoldSolidBRep> _manifoldSolidBReps = new Dictionary<string, ManifoldSolidBRep>();
         private static Dictionary<string, ShellBasedSurfaceModel> _shellBasedSurfaceModels = new Dictionary<string, ShellBasedSurfaceModel>();
+
+        // Geometric entity caches
+        private static Dictionary<string, Axis2Placement3D> _axis2Placements = new Dictionary<string, Axis2Placement3D>();
+        private static Dictionary<string, Plane> _planes = new Dictionary<string, Plane>();
+        private static Dictionary<string, Circle> _circles = new Dictionary<string, Circle>();
+        private static Dictionary<string, Ellipse> _ellipses = new Dictionary<string, Ellipse>();
+        private static Dictionary<string, CylindricalSurface> _cylindricalSurfaces = new Dictionary<string, CylindricalSurface>();
+        private static Dictionary<string, ConicalSurface> _conicalSurfaces = new Dictionary<string, ConicalSurface>();
+        private static Dictionary<string, SphericalSurface> _sphericalSurfaces = new Dictionary<string, SphericalSurface>();
+        private static Dictionary<string, ToroidalSurface> _toroidalSurfaces = new Dictionary<string, ToroidalSurface>();
+        private static Dictionary<string, BSplineCurveWithKnots> _bSplineCurves = new Dictionary<string, BSplineCurveWithKnots>();
+        private static Dictionary<string, BSplineSurfaceWithKnots> _bSplineSurfaces = new Dictionary<string, BSplineSurfaceWithKnots>();
+
+        // Style entity caches
+        private static Dictionary<string, ColourRgb> _colourRgbs = new Dictionary<string, ColourRgb>();
+        private static Dictionary<string, SurfaceStyleFillArea> _surfaceStyleFillAreas = new Dictionary<string, SurfaceStyleFillArea>();
+        private static Dictionary<string, SurfaceStyleUsage> _surfaceStyleUsages = new Dictionary<string, SurfaceStyleUsage>();
+        private static Dictionary<string, PresentationStyleAssignment> _presentationStyleAssignments = new Dictionary<string, PresentationStyleAssignment>();
+        private static Dictionary<string, StyledItem> _styledItems = new Dictionary<string, StyledItem>();
 
 
         internal static void RegisterEntity(StepEntity entity) => _allExportedEntities.Add(entity);
@@ -491,12 +596,19 @@ namespace InventorLoaderCs
             _toroidalSurfaces.Clear();
             _bSplineCurves.Clear();
             _bSplineSurfaces.Clear();
-            _edgeLoops.Clear();
-            _faceBounds.Clear();
-            _advancedFaces.Clear();
-            _openShells.Clear();
-            _manifoldSolidBReps.Clear();
-            _shellBasedSurfaceModels.Clear();
+
+            _planes.Clear();
+            _circles.Clear();
+            _ellipses.Clear();
+            _conicalSurfaces.Clear();
+            _sphericalSurfaces.Clear();
+            _toroidalSurfaces.Clear();
+            // Add new style caches
+            _colourRgbs.Clear();
+            _styledItems.Clear();
+            _presentationStyleAssignments.Clear();
+            _surfaceStyleUsages.Clear();
+            _surfaceStyleFillAreas.Clear();
         }
 
         public static string Export(Inventor acisModel, string originalFileName, StreamWriter logFile = null)
@@ -529,49 +641,52 @@ namespace InventorLoaderCs
 
             // Simplified Traversal: Convert one hardcoded or simple entity
             // Example: Create and export a single point for testing
-            if (acisModel != null) // Check if model exists
+            if (acisModel != null && acisModel.Segments != null)
             {
-                 // Try to find a point entity from the ACIS model to convert
-                Point acisPoint = null;
-                CurveStraight acisLine = null;
-
-                foreach(var segment in acisModel.Segments.Values)
+                foreach (var segmentPair in acisModel.Segments)
                 {
-                    if(segment.Nodes != null)
+                    RSeSegment segment = segmentPair.Value;
+                    if (segment.ParsedContent != null && segment.ParsedContent.TryGetValue("ACIS", out object acisReaderObj) && acisReaderObj is AcisReader acisReader)
                     {
-                        foreach(var secNode in segment.Nodes)
+                        Logger.Info($"Processing ACIS data from segment: {segment.Name}");
+                        foreach (var record in acisReader.RecordsList)
                         {
-                            if(secNode.Entity is Point p) { acisPoint = p; break; }
-                            if(secNode.Entity is CurveStraight cs) { acisLine = cs; break; }
+                            if (record?.Entity == null) continue;
+
+                            if (record.Entity is AcisPoint acisPoint)
+                            {
+                                CreateCartesianPoint(acisPoint.Position);
+                            }
+                            else if (record.Entity is CurveStraight cs)
+                            {
+                                CreateLine(cs);
+                            }
+                            else if (record.Entity is SurfacePlane sp)
+                            {
+                                CreatePlane(sp);
+                            }
+                            else if (record.Entity is AcisTransform at)
+                            {
+                                // Simplified: treat AcisTransform as defining a placement
+                                // This requires extracting location, axis, refDir from Matrix4x4
+                                // For now, creating a default placement if an AcisTransform is found
+                                Vector3 location = at.Matrix.Translation;
+                                Vector3 axis = Vector3.Normalize(new Vector3(at.Matrix.M13, at.Matrix.M23, at.Matrix.M33)); // Z-axis
+                                Vector3 refDir = Vector3.Normalize(new Vector3(at.Matrix.M11, at.Matrix.M21, at.Matrix.M31)); // X-axis
+                                CreateAxis2Placement3D(location, axis, refDir, $"PlacementForTransform{at.Index}");
+                            }
+                            // Add more types as needed
                         }
                     }
-                    if(acisPoint != null || acisLine != null) break;
                 }
-
-                if (acisPoint != null)
-                {
-                    CreateCartesianPoint(acisPoint.Position); // This creates and registers it
-                }
-                else if (acisLine != null)
-                {
-                    // Convert Acis CurveStraight to STEP Line
-                    var startPoint = CreateCartesianPoint(acisLine.Root, "L_START");
-                    var direction = CreateDirection(acisLine.Dir, "L_DIR");
-                    var vector = CreateVector(direction, (acisLine.CurveRange.GetUpperLimit() - acisLine.CurveRange.GetLowerLimit()), "L_VEC"); // Approx length
-                    CreateLine(startPoint, vector, "TestLine");
-                }
-                else
-                {
-                     Logger.Warning("StepConverterUtils.Export: No suitable ACIS point or line found for test export.");
-                     // Create a default point if nothing found
-                     CreateCartesianPoint(new Vector3(10,20,30), "DefaultTestPoint");
-                }
-            } else {
+            }
+            else
+            {
+                 Logger.Warning("StepConverterUtils.Export: No ACIS model or segments provided for export. Creating default point.");
                  CreateCartesianPoint(new Vector3(10,20,30), "DefaultTestPointNoModel");
             }
 
-
-            // Export all registered DATA entities
+            // Export all registered DATA entities that were created
             foreach (var entity in _allExportedEntities)
             {
                 stepBuilder.Append(entity.ExportStep());
@@ -590,179 +705,435 @@ namespace InventorLoaderCs
         }
 
         // --- Create* Methods with Caching ---
-        public static CartesianPoint CreateCartesianPoint(Vector3 vec, string name = "")
+        public static CartesianPoint CreateCartesianPoint(Vector3 vec, string name = "", bool useCache = true)
         {
-            string key = $"{vec.X:F6},{vec.Y:F6},{vec.Z:F6}_{name}"; // Format to handle precision issues in keys
-            if (!_cartesianPoints.TryGetValue(key, out CartesianPoint cp))
+            string key = $"CP_{vec.X:F8}_{vec.Y:F8}_{vec.Z:F8}"; // Increased precision for cache key
+            if (useCache && _cartesianPoints.TryGetValue(key, out CartesianPoint cp))
             {
-                cp = new CartesianPoint(name, new List<double> { vec.X, vec.Y, vec.Z });
-                _cartesianPoints[key] = cp;
+                return cp;
             }
+            cp = new CartesianPoint(name, vec.X, vec.Y, vec.Z);
+            if (useCache) _cartesianPoints[key] = cp;
             return cp;
         }
 
-        public static Direction CreateDirection(Vector3 vec, string name = "")
+        public static Direction CreateDirection(Vector3 vec, string name = "", bool useCache = true)
         {
-            var normalizedVec = Vector3.Normalize(vec);
-            string key = $"{normalizedVec.X:F6},{normalizedVec.Y:F6},{normalizedVec.Z:F6}_{name}";
-            if (!_directions.TryGetValue(key, out Direction dir))
+            var normalizedVec = vec.LengthSquared() > 1e-12f ? Vector3.Normalize(vec) : vec; // Avoid normalizing zero vector
+            string key = $"DIR_{normalizedVec.X:F8}_{normalizedVec.Y:F8}_{normalizedVec.Z:F8}";
+            if (useCache && _directions.TryGetValue(key, out Direction dir))
             {
-                dir = new Direction(name, new List<double> { normalizedVec.X, normalizedVec.Y, normalizedVec.Z });
-                _directions[key] = dir;
+                return dir;
             }
+            dir = new Direction(name, normalizedVec.X, normalizedVec.Y, normalizedVec.Z);
+            if (useCache) _directions[key] = dir;
             return dir;
         }
 
-        public static Vector CreateVector(Direction orientation, double magnitude, string name = "")
+        public static Vector CreateVector(Direction orientation, double magnitude, string name = "", bool useCache = true)
         {
-            // Key could be based on orientation.ToString() and magnitude
-            string key = $"{orientation}_{magnitude}_{name}";
-            if(!_vectors.TryGetValue(key, out var vec))
+            string key = $"VEC_{orientation.Id}_{magnitude:F8}";
+            if (useCache && !_vectors.TryGetValue(key, out var vec))
             {
                 vec = new Vector(name, orientation, magnitude);
-                _vectors[key] = vec;
+                if (useCache) _vectors[key] = vec;
+                return vec;
             }
-            return vec;
+            // Fallback for no cache hit or if not using cache
+            return _vectors.TryGetValue(key, out var cachedVec) ? cachedVec : new Vector(name, orientation, magnitude);
         }
 
-        public static Line CreateLine(CartesianPoint pnt, Vector dir, string name = "")
+        public static Line CreateLine(AcisCurveStraight acisLine, string name = "", bool useCache = true)
         {
-            string key = $"{pnt}_{dir}_{name}";
-            if(!_lines.TryGetValue(key, out var line))
+            if (acisLine == null) return CreateDefaultLine(name);
+            var pnt = CreateCartesianPoint(acisLine.Root, name + "_pnt", useCache);
+            var dirVec = CreateDirection(acisLine.Dir, name + "_dir_orientation", useCache);
+            // Assuming acisLine.Dir is a direction vector, its length is 1.
+            // If acisLine.Dir was intended to store magnitude as well, that logic would need adjustment.
+            // For a line, vector magnitude is implicitly infinite. STEP often uses unit vector for direction.
+            // Let's create a STEP vector with magnitude 1.0 for normalized direction.
+            var stepVec = CreateVector(dirVec, 1.0, name + "_vec", useCache);
+
+            string key = $"LINE_{pnt.Id}_{stepVec.Id}";
+            if (useCache && _lines.TryGetValue(key, out var line))
             {
-                line = new Line(name, pnt, dir);
-                _lines[key] = line;
+                return line;
             }
+            line = new Line(name, pnt, stepVec);
+            if (useCache) _lines[key] = line;
             return line;
         }
 
-        public static VertexPoint CreateVertexPoint(CartesianPoint point, string name = "")
+        public static VertexPoint CreateVertexPoint(AcisVertex acisVertex, string name = "", bool useCache = true)
         {
-            string key = $"{point}_{name}";
-            if (!_vertexPoints.TryGetValue(key, out var vp))
+            if (acisVertex?.PointEntity == null) return null; // Or throw/log
+            var cp = CreateCartesianPoint(acisVertex.PointEntity.Position, name + "_geom", useCache);
+            string key = $"VP_{cp.Id}";
+            if (useCache && _vertexPoints.TryGetValue(key, out var vp))
             {
-                vp = new VertexPoint(name, point);
-                _vertexPoints[key] = vp;
+                return vp;
             }
+            vp = new VertexPoint(name, cp);
+            if (useCache) _vertexPoints[key] = vp;
             return vp;
         }
 
-        public static EdgeCurve CreateEdgeCurve(VertexPoint start, VertexPoint end, StepEntity curveGeom, bool sense, string name = "")
+        public static EdgeCurve CreateEdgeCurve(AcisEdge acisEdge, string name = "", bool useCache = true)
         {
-            string key = $"{start}_{end}_{curveGeom}_{sense}_{name}";
-            if(!_edgeCurves.TryGetValue(key, out var ec))
+            if (acisEdge == null) return null;
+            var startVp = CreateVertexPoint(acisEdge.StartVertex, name + "_start_v", useCache);
+            var endVp = CreateVertexPoint(acisEdge.EndVertex, name + "_end_v", useCache);
+            var curveGeom = CreateCurveGeometry(acisEdge.CurveEntity, name + "_curve", useCache);
+            bool sense = acisEdge.Sense == SenseEnum.FORWARD || acisEdge.Sense == SenseEnum.UNKNOWN; // Default UNKNOWN to FORWARD for STEP
+
+            string key = $"EC_{startVp?.Id}_{endVp?.Id}_{curveGeom?.Id}_{sense}";
+             if (useCache && _edgeCurves.TryGetValue(key, out var ec))
             {
-                ec = new EdgeCurve(name, start, end, curveGeom, sense);
-                _edgeCurves[key] = ec;
+                return ec;
             }
+            ec = new EdgeCurve(name, startVp, endVp, curveGeom, sense);
+            if (useCache) _edgeCurves[key] = ec;
             return ec;
         }
 
-        public static OrientedEdge CreateOrientedEdge(EdgeCurve edgeElement, bool orientation, string name = "")
+        public static OrientedEdge CreateOrientedEdge(AcisCoEdge acisCoEdge, string name = "", bool useCache = true)
         {
-            string key = $"{edgeElement}_{orientation}_{name}";
-             if(!_orientedEdges.TryGetValue(key, out var oe))
+            if (acisCoEdge?.EdgeEntity == null) return null;
+            var edgeCurve = CreateEdgeCurve(acisCoEdge.EdgeEntity, name + "_edge", useCache);
+            bool orientation = acisCoEdge.Sense == SenseEnum.FORWARD || acisCoEdge.Sense == SenseEnum.UNKNOWN;
+
+            string key = $"OE_{edgeCurve?.Id}_{orientation}";
+            if (useCache && _orientedEdges.TryGetValue(key, out var oe))
             {
-                oe = new OrientedEdge(name, edgeElement, orientation);
-                _orientedEdges[key] = oe;
+                return oe;
             }
+            oe = new OrientedEdge(name, edgeCurve, orientation);
+            if (useCache) _orientedEdges[key] = oe;
             return oe;
         }
 
-        public static EdgeLoop CreateEdgeLoop(List<OrientedEdge> edgeList, string name = "")
+        public static EdgeLoop CreateEdgeLoop(AcisLoop acisLoop, string name = "", bool useCache = true)
         {
-            // Simple key for now, might need more robust hashing for list content if performance is an issue
-            string key = $"EdgeLoop_{edgeList.GetHashCode()}_{name}";
-            if (!_edgeLoops.TryGetValue(key, out var el))
+            if (acisLoop == null) return null;
+            var orientedEdges = new List<OrientedEdge>();
+            AcisCoEdge currentCoEdge = acisLoop.CoedgeEntity;
+            if (currentCoEdge != null)
             {
-                el = new EdgeLoop(name, edgeList);
-                _edgeLoops[key] = el;
+                AcisCoEdge startCoEdge = currentCoEdge;
+                do
+                {
+                    var oe = CreateOrientedEdge(currentCoEdge, name + $"_oe{orientedEdges.Count}", useCache);
+                    if (oe != null) orientedEdges.Add(oe);
+                    currentCoEdge = currentCoEdge.NextCoedge;
+                } while (currentCoEdge != null && currentCoEdge != startCoEdge);
             }
+
+            // Keying for lists can be complex. Using a simple count for now.
+            string key = $"EL_{orientedEdges.Count}_{orientedEdges.FirstOrDefault()?.Id}_{name}";
+            if (useCache && _edgeLoops.TryGetValue(key, out var el))
+            {
+                return el;
+            }
+            el = new EdgeLoop(name, orientedEdges);
+            if (useCache) _edgeLoops[key] = el;
             return el;
         }
 
-        public static FaceBound CreateFaceBound(EdgeLoop boundLoop, bool orientation, string name = "")
+        public static FaceBound CreateFaceBound(AcisLoop acisLoop, bool orientation, string name = "", bool useCache = true)
         {
-            string key = $"{boundLoop}_{orientation}_{name}";
-            if(!_faceBounds.TryGetValue(key, out var fb))
+            var edgeLoop = CreateEdgeLoop(acisLoop, name + "_loop", useCache);
+            string key = $"FB_{edgeLoop?.Id}_{orientation}";
+            if (useCache && _faceBounds.TryGetValue(key, out var fb))
             {
-                fb = new FaceBound(name, boundLoop, orientation);
-                 _faceBounds[key] = fb;
+                return fb;
             }
+            fb = new FaceBound(name, edgeLoop, orientation);
+            if (useCache) _faceBounds[key] = fb;
             return fb;
         }
 
-        public static FaceOuterBound CreateFaceOuterBound(EdgeLoop boundLoop, bool orientation, string name = "")
+        // CreateFaceOuterBound would be similar, just instantiating FaceOuterBound.
+
+        public static Axis2Placement3D CreateAxis2Placement3D(Vector3 location, Vector3 axis, Vector3 refDir, string name = "", bool useCache = true)
         {
-            // Using same cache as FaceBound for simplicity, or could have its own.
-            string key = $"FaceOuterBound_{boundLoop}_{orientation}_{name}";
-            if (!_faceBounds.TryGetValue(key, out var fobBase))
+            var locPt = CreateCartesianPoint(location, name + "_loc", useCache);
+            var axisDir = CreateDirection(axis, name + "_axis", useCache);
+            var refDirection = CreateDirection(refDir, name + "_refdir", useCache);
+            string key = $"A2P3D_{locPt.Id}_{axisDir.Id}_{refDirection.Id}";
+            if (useCache && _axis2Placements.TryGetValue(key, out var a2p3d))
             {
-                var fob = new FaceOuterBound(name, boundLoop, orientation);
-                _faceBounds[key] = fob; // Store as FaceBound in cache
-                return fob;
+                return a2p3d;
             }
-            return fobBase as FaceOuterBound ?? new FaceOuterBound(name, boundLoop, orientation); // Recast or create new
+            a2p3d = new Axis2Placement3D(name, locPt, axisDir, refDirection);
+            if (useCache) _axis2Placements[key] = a2p3d;
+            return a2p3d;
         }
 
-        public static AdvancedFace CreateAdvancedFace(List<FaceBound> bounds, Surface faceGeometry, bool sameSense, string name = "")
+        public static Plane CreatePlane(AcisSurfacePlane acisPlane, string name = "", bool useCache = true)
         {
-            // Keying for lists can be complex. Using hash codes is a simplification.
-            string key = $"AdvancedFace_{bounds.GetHashCode()}_{faceGeometry}_{sameSense}_{name}";
-            if(!_advancedFaces.TryGetValue(key, out var af))
+            if (acisPlane == null) return null; // Or a default plane
+            // Assuming acisPlane.Normal is the Z-axis, acisPlane.UvOrigin could define the X-axis direction relative to origin.
+            // This needs a robust way to get an orthogonal X direction if UvOrigin is not just along X.
+            // For now, a simplified assumption: UvOrigin gives a point on the plane, and we derive X axis.
+            // A common way: if Normal is Z, X can be global X unless Normal is aligned with global X.
+            Vector3 xAxisDirection = Vector3.Cross(Vector3.UnitY, acisPlane.Normal);
+            if (xAxisDirection.LengthSquared() < 1e-9) xAxisDirection = Vector3.Cross(Vector3.UnitX, acisPlane.Normal);
+            xAxisDirection = Vector3.Normalize(xAxisDirection);
+
+            var position = CreateAxis2Placement3D(acisPlane.Root, acisPlane.Normal, xAxisDirection, name + "_pos", useCache);
+            string key = $"PLANE_{position.Id}";
+            if (useCache && _planes.TryGetValue(key, out var plane))
             {
-                af = new AdvancedFace(name, bounds, faceGeometry, sameSense);
-                _advancedFaces[key] = af;
+                return plane;
             }
-            return af;
+            plane = new Plane(name, position);
+            if (useCache) _planes[key] = plane;
+            return plane;
         }
 
-        public static OpenShell CreateOpenShell(List<AdvancedFace> faces, string name = "")
+        public static Circle CreateCircle(AcisCurveEllipse acisEllipse, string name = "", bool useCache = true)
         {
-            string key = $"OpenShell_{faces.GetHashCode()}_{name}";
-            if(!_openShells.TryGetValue(key, out var os))
+            if (acisEllipse == null || Math.Abs(acisEllipse.Ratio - 1.0) > 1e-6) return null; // Not a circle
+
+            // Axis is Z, MajorAxisPoint helps define X. Location is Center.
+            var position = CreateAxis2Placement3D(acisEllipse.Center, acisEllipse.Axis, Vector3.Normalize(acisEllipse.MajorAxisPoint - acisEllipse.Center), name + "_pos", useCache);
+            double radius = (acisEllipse.MajorAxisPoint - acisEllipse.Center).Length();
+
+            string key = $"CIRCLE_{position.Id}_{radius:F8}";
+            if (useCache && _circles.TryGetValue(key, out var circle))
             {
-                os = new OpenShell(name, faces);
-                _openShells[key] = os;
+                return circle;
             }
-            return os;
+            circle = new Circle(name, position, radius);
+            if (useCache) _circles[key] = circle;
+            return circle;
         }
 
-        public static ClosedShell CreateClosedShell(List<AdvancedFace> faces, string name = "")
+        public static Ellipse CreateEllipse(AcisCurveEllipse acisEllipse, string name = "", bool useCache = true)
         {
-            string key = $"ClosedShell_{faces.GetHashCode()}_{name}";
-            if (!_openShells.TryGetValue(key, out var csBase)) // Store in OpenShell cache
+            if (acisEllipse == null) return null;
+            var position = CreateAxis2Placement3D(acisEllipse.Center, acisEllipse.Axis, Vector3.Normalize(acisEllipse.MajorAxisPoint - acisEllipse.Center), name + "_pos", useCache);
+            double semiAxis1 = (acisEllipse.MajorAxisPoint - acisEllipse.Center).Length();
+            double semiAxis2 = semiAxis1 * acisEllipse.Ratio;
+
+            string key = $"ELLIPSE_{position.Id}_{semiAxis1:F8}_{semiAxis2:F8}";
+            if (useCache && _ellipses.TryGetValue(key, out var ellipse))
             {
-                var cs = new ClosedShell(name, faces);
-                _openShells[key] = cs;
-                return cs;
+                return ellipse;
             }
-            return csBase as ClosedShell ?? new ClosedShell(name, faces);
+            ellipse = new Ellipse(name, position, semiAxis1, semiAxis2);
+            if (useCache) _ellipses[key] = ellipse;
+            return ellipse;
         }
 
-        public static ManifoldSolidBRep CreateManifoldSolidBRep(ClosedShell outerShell, string name = "")
+        public static ConicalSurface CreateConicalSurface(AcisSurfaceCone acisCone, string name = "", bool useCache = true)
         {
-            string key = $"MSB_{outerShell}_{name}";
-            if(!_manifoldSolidBReps.TryGetValue(key, out var msb))
+            if (acisCone == null) return null;
+            // RefDir: project RefAxisPoint onto plane normal to Axis, vector from Center to this projection.
+            Vector3 axisNorm = Vector3.Normalize(acisCone.Axis);
+            Vector3 centerToRefPt = acisCone.RefAxisPoint - acisCone.Center;
+            Vector3 refDir = Vector3.Normalize(centerToRefPt - Vector3.Dot(centerToRefPt, axisNorm) * axisNorm);
+            if (refDir.LengthSquared() < 1e-9) refDir = AcisUtils.GetArbitraryAxis(axisNorm); // Fallback if ref point on axis
+
+            var placement = CreateAxis2Placement3D(acisCone.Center, acisCone.Axis, refDir, name + "_pos", useCache);
+            double radius = acisCone.RadiusAtCenter; // Radius at Z=0 of placement
+            double semiAngle = Math.Asin(acisCone.SineAngle); // SineAngle is sin of half angle
+
+            string key = $"CONICALSF_{placement.Id}_{radius:F8}_{semiAngle:F8}";
+            if (useCache && _conicalSurfaces.TryGetValue(key, out var conSurf))
             {
-                msb = new ManifoldSolidBRep(name, outerShell);
-                _manifoldSolidBReps[key] = msb;
+                return conSurf;
             }
-            return msb;
+            conSurf = new ConicalSurface(name, placement, radius, semiAngle);
+            if (useCache) _conicalSurfaces[key] = conSurf;
+            return conSurf;
         }
 
-        public static ShellBasedSurfaceModel CreateShellBasedSurfaceModel(List<OpenShell> shells, string name = "")
+        public static CylindricalSurface CreateCylindricalSurfaceFromCone(AcisSurfaceCone acisConeAsCylinder, string name = "", bool useCache = true)
         {
-            string key = $"SBSM_{shells.GetHashCode()}_{name}";
-            if(!_shellBasedSurfaceModels.TryGetValue(key, out var sbsm))
+            if (acisConeAsCylinder == null) return null;
+             Vector3 axisNorm = Vector3.Normalize(acisConeAsCylinder.Axis);
+            Vector3 centerToRefPt = acisConeAsCylinder.RefAxisPoint - acisConeAsCylinder.Center;
+            Vector3 refDir = Vector3.Normalize(centerToRefPt - Vector3.Dot(centerToRefPt, axisNorm) * axisNorm);
+            if (refDir.LengthSquared() < 1e-9) refDir = AcisUtils.GetArbitraryAxis(axisNorm);
+
+            var placement = CreateAxis2Placement3D(acisConeAsCylinder.Center, acisConeAsCylinder.Axis, refDir, name + "_pos", useCache);
+            double radius = acisConeAsCylinder.RadiusAtCenter;
+
+            string key = $"CYLINDRICALSF_{placement.Id}_{radius:F8}";
+            if (useCache && _cylindricalSurfaces.TryGetValue(key, out var cylSurf))
             {
-                sbsm = new ShellBasedSurfaceModel(name, shells);
-                _shellBasedSurfaceModels[key] = sbsm;
+                return cylSurf;
             }
-            return sbsm;
+            cylSurf = new CylindricalSurface(name, placement, radius);
+            if (useCache) _cylindricalSurfaces[key] = cylSurf;
+            return cylSurf;
         }
 
-        public static Axis2Placement3D CreateAxis2Placement3D(Vector3 location, Vector3 axis, Vector3 refDir, string name = "")
+
+        public static SphericalSurface CreateSphericalSurface(AcisSurfaceSphere acisSphere, string name = "", bool useCache = true)
+        {
+            if (acisSphere == null) return null;
+            // Axis is Pole (Z), RefDirection is UvOrigin (X)
+            var placement = CreateAxis2Placement3D(acisSphere.Center, acisSphere.Pole, acisSphere.UvOrigin, name + "_pos", useCache);
+
+            string key = $"SPHERICALSF_{placement.Id}_{acisSphere.Radius:F8}";
+            if (useCache && _sphericalSurfaces.TryGetValue(key, out var sphSurf))
+            {
+                return sphSurf;
+            }
+            sphSurf = new SphericalSurface(name, placement, acisSphere.Radius);
+            if (useCache) _sphericalSurfaces[key] = sphSurf;
+            return sphSurf;
+        }
+
+        public static ToroidalSurface CreateToroidalSurface(AcisSurfaceTorus acisTorus, string name = "", bool useCache = true)
+        {
+            if (acisTorus == null) return null;
+            // Axis is Z, RefDirection derived from UvOriginPoint
+            Vector3 refDir = Vector3.Normalize(acisTorus.UvOriginPoint - acisTorus.Center);
+             if (refDir.LengthSquared() < 1e-9) refDir = AcisUtils.GetArbitraryAxis(acisTorus.Axis);
+
+
+            var placement = CreateAxis2Placement3D(acisTorus.Center, acisTorus.Axis, refDir, name + "_pos", useCache);
+
+            string key = $"TOROIDALSF_{placement.Id}_{acisTorus.MajorRadius:F8}_{acisTorus.MinorRadius:F8}";
+            if (useCache && _toroidalSurfaces.TryGetValue(key, out var torSurf))
+            {
+                return torSurf;
+            }
+            torSurf = new ToroidalSurface(name, placement, acisTorus.MajorRadius, acisTorus.MinorRadius);
+            if (useCache) _toroidalSurfaces[key] = torSurf;
+            return torSurf;
+        }
+
+        public static StepEntity CreateBSplineCurveGeometry(BSCurveData splineData, string name = "", bool useCache = true)
+        {
+            if (splineData == null) return null;
+
+            List<CartesianPoint> controlPoints = splineData.Poles3D.Select((p, i) => CreateCartesianPoint(p, $"{name}_cp{i}", useCache)).ToList();
+
+            // Default STEP enums
+            StepEnumWrapper curveForm = new StepEnumWrapper("UNSPECIFIED_FORM"); // Or determine from data if possible
+            StepEnumWrapper knotSpec =  new StepEnumWrapper("UNSPECIFIED");
+            bool closedCurve = splineData.IsPeriodic; // Or specific logic for .T./.F.
+            bool selfIntersect = false; // Default to .F. unless known
+
+            string key = $"BSPLCF_{splineData.Degree}_{controlPoints.GetHashCode()}_{splineData.Knots.GetHashCode()}_{splineData.Multiplicities.GetHashCode()}_{splineData.IsRational}";
+
+            if (useCache && _bSplineCurves.TryGetValue(key, out var existingCurve)) return existingCurve;
+
+            if (splineData.IsRational)
+            {
+                var rationalCurve = new RationalBSplineCurve(name, splineData.Degree, controlPoints, curveForm, closedCurve, selfIntersect,
+                                                          splineData.Multiplicities, splineData.Knots, knotSpec, splineData.Weights);
+                if(useCache) _bSplineCurves[key] = rationalCurve;
+                return rationalCurve;
+            }
+            else
+            {
+                var curve = new BSplineCurveWithKnots(name, splineData.Degree, controlPoints, curveForm, closedCurve, selfIntersect,
+                                                      splineData.Multiplicities, splineData.Knots, knotSpec);
+                if(useCache) _bSplineCurves[key] = curve;
+                return curve;
+            }
+        }
+
+        public static StepEntity CreateBSplineSurfaceGeometry(BSSurfaceData splineData, string name = "", bool useCache = true)
+        {
+            if (splineData == null) return null;
+
+            List<List<CartesianPoint>> controlPointGrid = new List<List<CartesianPoint>>();
+            for(int i=0; i < splineData.Poles.Count; i++)
+            {
+                var row = splineData.Poles[i];
+                controlPointGrid.Add(row.Select((p, j) => CreateCartesianPoint(p, $"{name}_cp{i}_{j}", useCache)).ToList());
+            }
+
+            StepEnumWrapper surfaceForm = new StepEnumWrapper("UNSPECIFIED_FORM");
+            StepEnumWrapper knotSpec = new StepEnumWrapper("UNSPECIFIED");
+            bool uClosed = splineData.UPeriodic;
+            bool vClosed = splineData.VPeriodic;
+            bool selfIntersect = false; // Default
+
+            string key = $"BSPLSF_{splineData.UDegree}_{splineData.VDegree}_{controlPointGrid.GetHashCode()}_{splineData.UKnots.GetHashCode()}_{splineData.VKnots.GetHashCode()}_{splineData.URational}";
+            if(useCache && _bSplineSurfaces.TryGetValue(key, out var existingSurf)) return existingSurf;
+
+            if (splineData.URational) // Assuming URational implies VRational for simplicity, matching BSSurfaceData
+            {
+                var rationalSurface = new RationalBSplineSurface(name, splineData.UDegree, splineData.VDegree, controlPointGrid, surfaceForm,
+                                                               uClosed, vClosed, selfIntersect, splineData.UMultiplicities, splineData.VMultiplicities,
+                                                               splineData.UKnots, splineData.VKnots, knotSpec, splineData.Weights);
+                if(useCache) _bSplineSurfaces[key] = rationalSurface;
+                return rationalSurface;
+            }
+            else
+            {
+                var surface = new BSplineSurfaceWithKnots(name, splineData.UDegree, splineData.VDegree, controlPointGrid, surfaceForm,
+                                                          uClosed, vClosed, selfIntersect, splineData.UMultiplicities, splineData.VMultiplicities,
+                                                          splineData.UKnots, splineData.VKnots, knotSpec);
+                if(useCache) _bSplineSurfaces[key] = surface;
+                return surface;
+            }
+        }
+
+
+        private static Line CreateDefaultLine(string name = "DefaultLine")
+        {
+            var p0 = CreateCartesianPoint(Vector3.Zero, name + "_p0", false);
+            var p1 = CreateCartesianPoint(Vector3.UnitX, name + "_p1", false);
+            var dir = CreateDirection(Vector3.UnitX, name + "_dir", false);
+            var vec = CreateVector(dir, 1.0, name + "_vec", false);
+            return new Line(name, p0, vec); // Not cached by default
+        }
+
+        public static StepEntity CreateCurveGeometry(AcisCurve acisCurve, string name = "", bool useCache = true)
+        {
+            if (acisCurve == null) return null;
+            switch (acisCurve)
+            {
+                case CurveStraight cs:
+                    return CreateLine(cs, name, useCache);
+                case CurveEllipse ce:
+                    if (Math.Abs(ce.Ratio - 1.0) < 1e-6)
+                        return CreateCircle(ce, name, useCache);
+                    else
+                        return CreateEllipse(ce, name, useCache);
+                case CurveInt ci when ci.SplineGeometricData != null:
+                    return CreateBSplineCurveGeometry(ci.SplineGeometricData, name, useCache);
+                case CurveInt ci: // Fallback for CurveInt without direct spline data (e.g. law, helix)
+                     Logger.Warning($"STEP conversion for specific CurveInt subtype '{ci.CurveSubtypeString}' (e.g. law, helix) not directly mapped to a simple STEP curve. Using default line for '{name}'.");
+                    return CreateDefaultLine(name + "_UnsupportedIntCurveComplex");
+                default:
+                    Logger.Warning($"Unknown AcisCurve type '{acisCurve.GetType().FullName}' for STEP conversion. Using default line for '{name}'.");
+                    return CreateDefaultLine(name + "_UnknownCurveType");
+            }
+        }
+
+        public static Surface CreateSurfaceGeometry(AcisSurface acisSurface, string name = "", bool useCache = true)
+        {
+            if (acisSurface == null) return null;
+            switch (acisSurface)
+            {
+                case SurfacePlane sp:
+                    return CreatePlane(sp, name, useCache);
+                case SurfaceCone sc:
+                    return Math.Abs(sc.SineAngle) < 1e-9 ?
+                           CreateCylindricalSurfaceFromCone(sc, name, useCache) :
+                           CreateConicalSurface(sc, name, useCache);
+                case SurfaceSphere ss:
+                    return CreateSphericalSurface(ss, name, useCache);
+                case SurfaceTorus st:
+                    return CreateToroidalSurface(st, name, useCache);
+                case SurfaceSpline sspl when sspl.SplineGeometricData != null:
+                    return CreateBSplineSurfaceGeometry(sspl.SplineGeometricData, name, useCache) as Surface; // Ensure cast if Create returns StepEntity
+                default:
+                    Logger.Warning($"Unknown AcisSurface type '{acisSurface.GetType().FullName}' for STEP conversion. Returning null for '{name}'.");
+                    return null; // Or return a default plane: CreatePlane(new AcisSurfacePlane(), name + "_default");
+            }
+        }
+
+        public static Axis2Placement3D CreateAxis2Placement3D(Vector3 location, Vector3 axis, Vector3 refDir, string name = "", bool useCache = true)
         {
             var locPt = CreateCartesianPoint(location);
             var axisDir = CreateDirection(axis);

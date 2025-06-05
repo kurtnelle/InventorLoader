@@ -1160,5 +1160,115 @@ namespace InventorLoaderCs
             ParsedContent[propertyName] = map;
             return map;
         }
+
+        // New helper methods for typed lists and transformations
+        public List<Vector3> ReadListOfVector3DFloat64(string propertyName, StreamWriter logFile)
+        {
+            LogAction(logFile, $"Reading ListOfVector3DFloat64 for {propertyName}");
+            var list = new List<Vector3>();
+            uint? count = ReadUInt32($"{propertyName}_count", logFile);
+            if (!count.HasValue)
+            {
+                LogAction(logFile, $"Error: Could not read count for list {propertyName}.");
+                ParsedContent[propertyName] = list;
+                return list;
+            }
+
+            // Python version reads: uInt32 (count), uInt32 (block header 1), uInt32 (block header 2)
+            // Assuming block headers are not part of the generic list structure handled here
+            // or are specific to the context where this list is read.
+            // If they are standard, they should be read before looping.
+            // For now, directly reading Vector3 data based on count.
+            // node.ReadUInt32($"{propertyName}_listBlockHeader1", logFile); // Example if headers were generic
+            // node.ReadUInt32($"{propertyName}_listBlockHeader2", logFile);
+
+            for (int i = 0; i < count.Value; i++)
+            {
+                Vector3? vec = ReadVector3DFloat64($"{propertyName}_Item{i}", logFile);
+                if (vec.HasValue)
+                {
+                    list.Add(vec.Value);
+                }
+                else
+                {
+                    LogAction(logFile, $"Warning: Failed to read Vector3D item {i} for list {propertyName}.");
+                    // Add a default or break, depending on desired strictness
+                    list.Add(Vector3.Zero);
+                }
+            }
+            ParsedContent[propertyName] = list;
+            return list;
+        }
+
+        public List<uint> ReadListOfUInt32(string propertyName, StreamWriter logFile)
+        {
+            LogAction(logFile, $"Reading ListOfUInt32 for {propertyName}");
+            var list = new List<uint>();
+            uint? count = ReadUInt32($"{propertyName}_count", logFile);
+            if (!count.HasValue)
+            {
+                LogAction(logFile, $"Error: Could not read count for list {propertyName}.");
+                ParsedContent[propertyName] = list;
+                return list;
+            }
+
+            // Similar to ReadListOfVector3DFloat64, skipping block headers for now.
+            // node.ReadUInt32($"{propertyName}_listBlockHeader1", logFile);
+            // node.ReadUInt32($"{propertyName}_listBlockHeader2", logFile);
+
+            for (int i = 0; i < count.Value; i++)
+            {
+                uint? val = ReadUInt32($"{propertyName}_Item{i}", logFile);
+                if (val.HasValue)
+                {
+                    list.Add(val.Value);
+                }
+                else
+                {
+                    LogAction(logFile, $"Warning: Failed to read UInt32 item {i} for list {propertyName}.");
+                    list.Add(0); // Add default or break
+                }
+            }
+            ParsedContent[propertyName] = list;
+            return list;
+        }
+
+        public Matrix4x4 ReadTransformation3D(string propertyName, StreamWriter logFile)
+        {
+            LogAction(logFile, $"Reading Transformation3D for {propertyName}");
+            double[] m = new double[12];
+            bool allDoublesRead = true;
+            for (int i = 0; i < 12; i++)
+            {
+                double? val = ReadFloat64($"{propertyName}.MatrixVal{i}", logFile);
+                if (val.HasValue)
+                {
+                    m[i] = val.Value;
+                }
+                else
+                {
+                    allDoublesRead = false;
+                    m[i] = (i % 4 == i / 4) ? 1.0 : 0.0; // Default to identity components on error
+                }
+            }
+
+            if (!allDoublesRead)
+            {
+                Logger.Warning($"SecNode.ReadTransformation3D: Failed to read all 12 matrix components for {propertyName}. Returning Identity.");
+                ParsedContent[propertyName] = Matrix4x4.Identity;
+                return Matrix4x4.Identity;
+            }
+
+            // Assuming matrix is stored row-major: Rxx Rxy Rxz Tx / Ryx Ryy Ryz Ty / Rzx Rzy Rzz Tz
+            var matrix = new Matrix4x4(
+                (float)m[0], (float)m[1], (float)m[2], 0,  // Row 1 (M11, M12, M13, M14=0)
+                (float)m[3], (float)m[4], (float)m[5], 0,  // Row 2 (M21, M22, M23, M24=0)
+                (float)m[6], (float)m[7], (float)m[8], 0,  // Row 3 (M31, M32, M33, M34=0)
+                (float)m[9], (float)m[10],(float)m[11],1); // Row 4 (Tx,  Ty,  Tz,  Tw=1)
+
+            ParsedContent[propertyName] = matrix;
+            return matrix;
+        }
+
     }
 }
