@@ -292,6 +292,12 @@ namespace InventorLoaderCs
         public override string ToString() => $".{Value}.";
     }
 
+    // Helper for optional parameters in STEP ($)
+    public struct StepDollarNotApplicable
+    {
+        public override string ToString() => "$";
+    }
+
 
     public class Plane : StepNamedEntity // PLANE (Subtype of ElementarySurface)
     {
@@ -447,15 +453,161 @@ namespace InventorLoaderCs
         public override List<object> GetParameters() => new List<object> { Name, Outer };
     }
 
-    public class ShellBasedSurfaceModel : StepNamedEntity // SHELL_BASED_SURFACE_MODEL
+    // Adjusted ShellBasedSurfaceModel to inherit from Representation
+    public class ShellBasedSurfaceModel : Representation // SHELL_BASED_SURFACE_MODEL
     {
-        public List<OpenShell> SbsmElements { get; set; } // List of shells
-        public ShellBasedSurfaceModel(string name, List<OpenShell> elements) : base(name) { SbsmElements = elements; }
+        // SbsmElements are the 'Items' of this representation.
+        // The constructor will pass 'elements' (cast to List<StepEntity>) to the base Representation constructor.
+        public ShellBasedSurfaceModel(string name, List<OpenShell> elements, RepresentationContext context = null)
+            : base(name, context, elements?.Cast<StepEntity>().ToList())
+        {
+            // Items are set in the base class. ContextOfItems is also set in base, can be null if not provided.
+            // If context is null here, a default might be needed or handled by the caller.
+            // For now, allowing null context to be passed to base.
+        }
         public override string GetClassName() => "SHELL_BASED_SURFACE_MODEL";
-        public override List<object> GetParameters() => new List<object> { Name, SbsmElements };
+        // Parameters: (Name, Items_List, Context_Of_Items)
+        public override List<object> GetParameters() => new List<object> { Name, Items, ContextOfItems };
     }
 
+    // --- Assembly Related STEP Entities ---
+    public class RepresentationMap : StepNamedEntity
+    {
+        public Axis2Placement3D MappingOrigin { get; } // Defines the placement of the mapped representation
+        public StepEntity MappedRepresentation { get; } // The canonical representation being mapped
+
+        public RepresentationMap(string name, Axis2Placement3D mappingOrigin, StepEntity mappedRepresentation) : base(name)
+        {
+            MappingOrigin = mappingOrigin;
+            MappedRepresentation = mappedRepresentation;
+        }
+        public override string GetClassName() => "REPRESENTATION_MAP";
+        // Standard REPRESENTATION_MAP parameters are (mapping_origin, mapped_representation). Name is implicit.
+        public override List<object> GetParameters() => new List<object> { MappingOrigin, MappedRepresentation };
+    }
+
+    public class MappedItem : StepNamedEntity // MAPPED_ITEM
+    {
+        public RepresentationMap MappingSource { get; } // How the item is mapped (transform + canonical rep)
+        public ShapeDefinitionRepresentation MappingTarget { get; } // What canonical part definition this item is an instance of
+
+        public MappedItem(string name, RepresentationMap mappingSource, ShapeDefinitionRepresentation mappingTarget) : base(name)
+        {
+            MappingSource = mappingSource;
+            MappingTarget = mappingTarget;
+        }
+        public override string GetClassName() => "MAPPED_ITEM";
+        public override List<object> GetParameters() => new List<object> { Name, MappingSource, MappingTarget };
+    }
+
+    public class AssemblyShapeRepresentation : Representation
+    {
+        // Items list (containing MappedItems or direct ShapeDefinitionRepresentations of sub-assemblies/parts) is inherited.
+        // ContextOfItems is also inherited.
+        public AssemblyShapeRepresentation(string name, List<StepEntity> items, RepresentationContext context)
+            : base(name, context, items)
+        {
+        }
+        // Using a common generic representation type. AP214/AP242 might use more specific ones like
+        // 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION' or similar.
+        public override string GetClassName() => "SHAPE_REPRESENTATION";
+        public override List<object> GetParameters() => new List<object> { Name, Items, ContextOfItems };
+    }
+
+    // --- Product Structure STEP Entities (NAUO) ---
+    public class NextAssemblyUsageOccurrence : StepNamedEntity
+    {
+        public string NauoId { get; } // Instance ID
+        public string Description { get; }
+        public ProductDefinition RelatingProductDefinition { get; } // Assembly definition
+        public ProductDefinition RelatedProductDefinition { get; }  // Component definition
+        public string ReferenceDesignator { get; } // Optional
+
+        public NextAssemblyUsageOccurrence(string name, string id, string description,
+                                           ProductDefinition relatingPd, ProductDefinition relatedPd,
+                                           string referenceDesignator = "") : base(name)
+        {
+            NauoId = id;
+            Description = description;
+            RelatingProductDefinition = relatingPd;
+            RelatedProductDefinition = relatedPd;
+            ReferenceDesignator = string.IsNullOrEmpty(referenceDesignator) ? "$" : $"'{referenceDesignator}'";
+        }
+
+        public override string GetClassName() => "NEXT_ASSEMBLY_USAGE_OCCURRENCE";
+
+        // Parameters: ID, Name, Description, Relating_PD, Related_PD, Reference_Designator (optional)
+        public override List<object> GetParameters() => new List<object> {
+            NauoId, Name, Description,
+            RelatingProductDefinition, RelatedProductDefinition,
+            ReferenceDesignator // Already formatted with quotes or $
+        };
+    }
+
+    public class ContextDependentShapeRepresentation : StepNamedEntity
+    {
+        public ShapeDefinitionRepresentation RepresentationRelation; // Link to the SDR this CDSR contextualizes
+        public ProductDefinitionShape RepresentedProductDefinitionShape; // Link to the PDS of the component part
+
+        public ContextDependentShapeRepresentation(string name,
+                                                   ShapeDefinitionRepresentation representationToContextualize,
+                                                   ProductDefinitionShape representedProductDefinitionShape) : base(name)
+        {
+            RepresentationRelation = representationToContextualize;
+            RepresentedProductDefinitionShape = representedProductDefinitionShape;
+        }
+
+        public override string GetClassName() => "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION";
+
+        // Parameters: Name (implicit), RepresentationRelation, RepresentedProductDefinitionShape
+        // The actual STEP entity is (CONTEXT_OF_REPRESENTATION, REPRESENTATION_RELATIONSHIP)
+        // CONTEXT_OF_REPRESENTATION is the ProductDefinitionShape (or similar)
+        // REPRESENTATION_RELATIONSHIP contains the name, description, rep_1, rep_2
+        // This simplified C# class aims to capture the core links for AP203/AP214 usage.
+        // A more precise mapping might involve a SHAPE_REPRESENTATION_RELATIONSHIP entity.
+        // For now, assuming parameters are (Name, ContextOfShape (PDS), ShapeRepresentationInContext (SDR))
+        // Let's adjust based on typical AP214 usage:
+        // CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(SHAPE_REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(), REPRESENTED_PRODUCT_RELATION.PRODUCT_DESIGN_VERSION);
+        // This suggests the first parameter is more complex.
+        // Simpler usage for now: (Representation To Contextualize, ProductDefinitionShape of component)
+        // The 'Name' from StepNamedEntity is often not directly part of CDSR parameters.
+        // CDSR links a specific representation use (like a MAPPED_ITEM via an SDR) to a defining PDS.
+        public override List<object> GetParameters() => new List<object> {
+            RepresentationRelation, // The SDR that holds the MAPPED_ITEM or canonical shape for this instance
+            RepresentedProductDefinitionShape // The PDS of the component part definition
+        };
+        // Name property from StepNamedEntity will be part of the base class export if that class includes it.
+        // For CDSR, the name is often empty or context-specific and might not be a direct parameter in the simplest form.
+        // Let's assume GetParameters() should list only the specific parameters of CDSR itself.
+    }
+
+
     // --- Style & Presentation Entities ---
+
+    public class CurveStyle : StepNamedEntity // CURVE_STYLE
+    {
+        public ColourRgb CurveColour { get; }
+        public object CurveWidth { get; } // Can be MeasureWithUnit (double for now) or StepDollarNotApplicable
+
+        // Simplified constructor: curve_font is often optional and complex.
+        // For now, only color and width.
+        public CurveStyle(string name, ColourRgb curveColour, object curveWidth) : base(name)
+        {
+            CurveColour = curveColour;
+            CurveWidth = curveWidth; // Store as object, ObjToString will handle $ or double
+        }
+
+        public override string GetClassName() => "CURVE_STYLE";
+
+        // Parameters: Name, CurveFont (omitted for now, so $), CurveColour, CurveWidth
+        public override List<object> GetParameters() => new List<object> {
+            Name,
+            new StepDollarNotApplicable(), // Placeholder for CURVE_FONT
+            CurveColour,
+            CurveWidth
+        };
+    }
+
     public class ColourRgb : StepNamedEntity // COLOUR_RGB (actually just COLOUR)
     {
         public double Red { get; set; }
@@ -501,6 +653,138 @@ namespace InventorLoaderCs
         { Styles = styles; Item = item; }
         public override string GetClassName() => "STYLED_ITEM";
         public override List<object> GetParameters() => new List<object> { Name, Styles, Item };
+    }
+
+    // --- Product Definition STEP Entities ---
+    public class ApplicationContext : StepNamedEntity
+    {
+        public string DescriptionAttribute { get; } // Renamed to avoid conflict with base Name
+        public ApplicationContext(string name, string description) : base(name) { DescriptionAttribute = description; }
+        public override string GetClassName() => "APPLICATION_CONTEXT";
+        public override List<object> GetParameters() => new List<object> { DescriptionAttribute }; // Name is implicit
+    }
+
+    public class ProductContext : StepNamedEntity
+    {
+        public ApplicationContext FrameOfReference { get; }
+        public string DisciplineType { get; }
+        public ProductContext(string name, ApplicationContext frame, string disciplineType) : base(name)
+        {
+            FrameOfReference = frame;
+            DisciplineType = disciplineType;
+        }
+        public override string GetClassName() => "PRODUCT_CONTEXT";
+        public override List<object> GetParameters() => new List<object> { Name, FrameOfReference, DisciplineType };
+    }
+
+    public class Product : StepNamedEntity
+    {
+        public string ProductId { get; }
+        public string Description { get; }
+        public List<ProductContext> FrameOfReference { get; } // List of ProductContext
+        public Product(string name, string id, string description, List<ProductContext> frameOfReference) : base(name)
+        {
+            ProductId = id;
+            Description = description;
+            FrameOfReference = frameOfReference ?? new List<ProductContext>();
+        }
+        public override string GetClassName() => "PRODUCT";
+        public override List<object> GetParameters() => new List<object> { ProductId, Name, Description, FrameOfReference };
+    }
+
+    public class ProductDefinitionFormation : StepNamedEntity
+    {
+        public string FormationId { get; } // Changed from ProductId to avoid confusion, often product.id
+        public Product OfProduct { get; }
+        public ProductDefinitionFormation(string name, string id, Product product) : base(name)
+        {
+            FormationId = id;
+            OfProduct = product;
+        }
+        public override string GetClassName() => "PRODUCT_DEFINITION_FORMATION";
+        public override List<object> GetParameters() => new List<object> { FormationId, Name, OfProduct }; // Name is description here
+    }
+
+    public class ProductDefinitionContext : StepNamedEntity
+    {
+        public ApplicationContext FrameOfReference { get; }
+        public string LifeCycleStage { get; }
+        public ProductDefinitionContext(string name, ApplicationContext frame, string lifeCycleStage) : base(name)
+        {
+            FrameOfReference = frame;
+            LifeCycleStage = lifeCycleStage;
+        }
+        public override string GetClassName() => "PRODUCT_DEFINITION_CONTEXT";
+        public override List<object> GetParameters() => new List<object> { Name, FrameOfReference, LifeCycleStage };
+    }
+
+    public class ProductDefinition : StepNamedEntity
+    {
+        public string DefinitionId { get; }
+        public ProductDefinitionFormation Formation { get; }
+        public ProductDefinitionContext FrameOfReference { get; } // Context of this definition
+        public ProductDefinition(string name, string id, ProductDefinitionFormation formation, ProductDefinitionContext frame) : base(name)
+        {
+            DefinitionId = id;
+            Formation = formation;
+            FrameOfReference = frame;
+        }
+        public override string GetClassName() => "PRODUCT_DEFINITION";
+        public override List<object> GetParameters() => new List<object> { DefinitionId, Name, Formation, FrameOfReference };
+    }
+
+    public class ProductDefinitionShape : StepNamedEntity
+    {
+        public string Description { get; }
+        public ProductDefinition DefinitionOfShape { get; }
+        public ProductDefinitionShape(string name, string description, ProductDefinition definitionOfShape) : base(name)
+        {
+            Description = string.IsNullOrEmpty(description) ? "Shape Definition" : description; // Ensure description is not null for STEP
+            DefinitionOfShape = definitionOfShape;
+        }
+        public override string GetClassName() => "PRODUCT_DEFINITION_SHAPE";
+        public override List<object> GetParameters() => new List<object> { Name, Description, DefinitionOfShape };
+    }
+
+    public abstract class Representation : StepNamedEntity // Abstract base for different representations
+    {
+        public RepresentationContext ContextOfItems { get; set; }
+        public List<StepEntity> Items { get; protected set; } // Items that make up the representation
+
+        protected Representation(string name, RepresentationContext context, List<StepEntity> items = null) : base(name)
+        {
+            ContextOfItems = context;
+            Items = items ?? new List<StepEntity>();
+        }
+        // GetParameters in derived classes will need to include ContextOfItems and Items.
+    }
+
+    public class RepresentationContext : StepNamedEntity // Minimal placeholder
+    {
+        public string ContextType { get; set; } // e.g., 'GM' for Geometric Model
+        public RepresentationContext(string name, string contextType) : base(name)
+        {
+            ContextType = contextType;
+        }
+        public override string GetClassName() => "REPRESENTATION_CONTEXT";
+        public override List<object> GetParameters() => new List<object> { Name, ContextType };
+    }
+
+    // Adjust ShellBasedSurfaceModel to inherit from Representation
+    // public class ShellBasedSurfaceModel : Representation ... (will adjust this later where SBSM is defined)
+
+
+    public class ShapeDefinitionRepresentation : StepNamedEntity
+    {
+        public ProductDefinitionShape Definition { get; }
+        public StepEntity UsedRepresentation { get; set; } // Changed to StepEntity to allow ShellBasedSurfaceModel etc.
+        public ShapeDefinitionRepresentation(string name, ProductDefinitionShape definition, StepEntity usedRepresentation) : base(name)
+        {
+            Definition = definition;
+            UsedRepresentation = usedRepresentation;
+        }
+        public override string GetClassName() => "SHAPE_DEFINITION_REPRESENTATION";
+        public override List<object> GetParameters() => new List<object> { Definition, UsedRepresentation };
     }
 
 
@@ -571,6 +855,33 @@ namespace InventorLoaderCs
         private static Dictionary<string, SurfaceStyleUsage> _surfaceStyleUsages = new Dictionary<string, SurfaceStyleUsage>();
         private static Dictionary<string, PresentationStyleAssignment> _presentationStyleAssignments = new Dictionary<string, PresentationStyleAssignment>();
         private static Dictionary<string, StyledItem> _styledItems = new Dictionary<string, StyledItem>();
+        private static Dictionary<string, CurveStyle> _curveStyles = new Dictionary<string, CurveStyle>(); // New cache for CurveStyle
+
+        // Product definition entity caches
+        private static Dictionary<string, ApplicationContext> _applicationContexts = new Dictionary<string, ApplicationContext>();
+        private static Dictionary<string, ProductContext> _productContexts = new Dictionary<string, ProductContext>();
+        private static Dictionary<string, Product> _products = new Dictionary<string, Product>();
+        private static Dictionary<string, ProductDefinitionFormation> _productDefinitionFormations = new Dictionary<string, ProductDefinitionFormation>();
+        private static Dictionary<string, ProductDefinitionContext> _productDefinitionContexts = new Dictionary<string, ProductDefinitionContext>();
+        private static Dictionary<string, ProductDefinition> _productDefinitions = new Dictionary<string, ProductDefinition>();
+        private static Dictionary<string, ProductDefinitionShape> _productDefinitionShapes = new Dictionary<string, ProductDefinitionShape>();
+        private static Dictionary<string, ShapeDefinitionRepresentation> _shapeDefinitionRepresentations = new Dictionary<string, ShapeDefinitionRepresentation>();
+
+        // Assembly entity caches
+        private static Dictionary<string, RepresentationContext> _representationContexts = new Dictionary<string, RepresentationContext>();
+        private static Dictionary<string, RepresentationMap> _representationMaps = new Dictionary<string, RepresentationMap>();
+        private static Dictionary<string, MappedItem> _mappedItems = new Dictionary<string, MappedItem>();
+        private static Dictionary<string, AssemblyShapeRepresentation> _assemblyShapeRepresentations = new Dictionary<string, AssemblyShapeRepresentation>();
+        private static Dictionary<string, NextAssemblyUsageOccurrence> _nauos = new Dictionary<string, NextAssemblyUsageOccurrence>();
+        private static Dictionary<string, ContextDependentShapeRepresentation> _cdsr = new Dictionary<string, ContextDependentShapeRepresentation>();
+
+        // Caches for MSB/SBSM and their shells (OpenShell/ClosedShell are already cached via _openShells)
+        // ManifoldSolidBRep and ShellBasedSurfaceModel are types of Representation, which are not typically cached by geometric key.
+        // Their uniqueness comes from their constituent shells and context.
+        // However, if specific instances need to be reused by ID, they could be cached.
+        // For now, no new specific caches for MSB/SBSM, they are registered like other StepEntities.
+        // OpenShell and ClosedShell will be cached by their factory methods if needed.
+        // The existing _openShells can serve for both OpenShell and ClosedShell as ClosedShell derives from OpenShell.
 
 
         internal static void RegisterEntity(StepEntity entity) => _allExportedEntities.Add(entity);
@@ -609,6 +920,26 @@ namespace InventorLoaderCs
             _presentationStyleAssignments.Clear();
             _surfaceStyleUsages.Clear();
             _surfaceStyleFillAreas.Clear();
+            _curveStyles.Clear(); // Clear new cache
+
+            // Clear product definition caches
+            _applicationContexts.Clear();
+            _productContexts.Clear();
+            _products.Clear();
+            _productDefinitionFormations.Clear();
+            _productDefinitionContexts.Clear();
+            _productDefinitions.Clear();
+            _productDefinitionShapes.Clear();
+            _shapeDefinitionRepresentations.Clear();
+
+            // Clear assembly entity caches
+            _representationContexts.Clear();
+            _representationMaps.Clear();
+            _mappedItems.Clear();
+            _assemblyShapeRepresentations.Clear();
+            _nauos.Clear();
+            _cdsr.Clear();
+            // No new specific caches for MSB/SBSM to clear here, _openShells covers shells.
         }
 
         public static string Export(Inventor acisModel, string originalFileName, StreamWriter logFile = null)
@@ -639,54 +970,228 @@ namespace InventorLoaderCs
             stepBuilder.AppendLine();
             stepBuilder.AppendLine("DATA;");
 
-            // Simplified Traversal: Convert one hardcoded or simple entity
-            // Example: Create and export a single point for testing
+            // --- Global Contexts ---
+            var appContext = CreateApplicationContext("Product definition schema for ACIS models via InventorLoaderCs", "AppContext");
+            var defaultRepContext = CreateRepresentationContext("GM", "DefaultGeomContext");
+
+
+            // --- Simulate and Prepare iProperties for Product Description ---
+            // Simulate iProperties for testing if not already populated by a reader
+            if (acisModel.iProperties == null)
+                acisModel.iProperties = new Dictionary<string, Dictionary<object, Tuple<string, object>>>();
+
+            if (!acisModel.iProperties.ContainsKey("Inventor Summary Information"))
+            {
+                var sumInfo = new Dictionary<object, Tuple<string, object>>();
+                sumInfo[4] = new Tuple<string, object>("Author", "AcisToStep C# Importer"); // Key 4 for Author
+                sumInfo[6] = new Tuple<string, object>("Comments", "File processed by custom C# ACIS to STEP converter."); // Key 6 for Comments
+                acisModel.iProperties["Inventor Summary Information"] = sumInfo;
+            }
+            if (!acisModel.iProperties.ContainsKey("Design Tracking Properties"))
+            {
+                var desProps = new Dictionary<object, Tuple<string, object>>();
+                desProps[5] = new Tuple<string, object>("Part Number", Path.GetFileNameWithoutExtension(originalFileName) + "-ASSY"); // Key 5 for PartNumber
+                desProps[29] = new Tuple<string, object>("Description", "Assembly top level product."); // Key 29 for Description
+                acisModel.iProperties["Design Tracking Properties"] = desProps;
+            }
+
+            var sbDescription = new System.Text.StringBuilder();
+            if (acisModel.iProperties.TryGetValue("Inventor Summary Information", out var summaryInfo))
+            {
+                if (summaryInfo.TryGetValue(4, out var authorTuple)) sbDescription.Append($"Author: {authorTuple.Item2}; ");
+                if (summaryInfo.TryGetValue(6, out var commentsTuple)) sbDescription.Append($"Comments: {commentsTuple.Item2}; ");
+            }
+            if (acisModel.iProperties.TryGetValue("Design Tracking Properties", out var designProps))
+            {
+                if (designProps.TryGetValue(5, out var partNoTuple)) sbDescription.Append($"PartNo: {partNoTuple.Item2}; ");
+                // Using key 29 for "Description" from iProperties for the product description field itself is redundant
+                // if we are constructing a summary. Let's pick another relevant one or keep it concise.
+                // if (designProps.TryGetValue(29, out var fileDescTuple)) sbDescription.Append($"FileDesc: {fileDescTuple.Item2}; ");
+            }
+            string productDescription = sbDescription.ToString().Trim();
+            if (string.IsNullOrEmpty(productDescription)) productDescription = "No description available.";
+            // Ensure description length is within typical STEP limits (e.g., 256 or 4000 chars, though PRODUCT description is usually shorter)
+            if (productDescription.Length > 250) productDescription = productDescription.Substring(0, 250) + "...";
+
+
+            // --- Product Definitions (Loop 1) ---
+            // Store: Product, ProductDefinition, ProductDefinitionShape, CanonicalSDR, CanonicalShapeContent
+            var bodyToProductDataMap = new Dictionary<AcisBody, (Product Product, ProductDefinition ProdDef, ProductDefinitionShape PDS, ShapeDefinitionRepresentation CanonicalSDR, StepEntity CanonicalShapeContent)>();
+
+            List<AcisBody> allAcisBodies = new List<AcisBody>();
             if (acisModel != null && acisModel.Segments != null)
             {
                 foreach (var segmentPair in acisModel.Segments)
                 {
-                    RSeSegment segment = segmentPair.Value;
-                    if (segment.ParsedContent != null && segment.ParsedContent.TryGetValue("ACIS", out object acisReaderObj) && acisReaderObj is AcisReader acisReader)
+                    if (segmentPair.Value.ParsedContent != null &&
+                        segmentPair.Value.ParsedContent.TryGetValue("ACIS", out object acisReaderObj) &&
+                        acisReaderObj is AcisReader acisReader)
                     {
-                        Logger.Info($"Processing ACIS data from segment: {segment.Name}");
-                        foreach (var record in acisReader.RecordsList)
-                        {
-                            if (record?.Entity == null) continue;
-
-                            if (record.Entity is AcisPoint acisPoint)
-                            {
-                                CreateCartesianPoint(acisPoint.Position);
-                            }
-                            else if (record.Entity is CurveStraight cs)
-                            {
-                                CreateLine(cs);
-                            }
-                            else if (record.Entity is SurfacePlane sp)
-                            {
-                                CreatePlane(sp);
-                            }
-                            else if (record.Entity is AcisTransform at)
-                            {
-                                // Simplified: treat AcisTransform as defining a placement
-                                // This requires extracting location, axis, refDir from Matrix4x4
-                                // For now, creating a default placement if an AcisTransform is found
-                                Vector3 location = at.Matrix.Translation;
-                                Vector3 axis = Vector3.Normalize(new Vector3(at.Matrix.M13, at.Matrix.M23, at.Matrix.M33)); // Z-axis
-                                Vector3 refDir = Vector3.Normalize(new Vector3(at.Matrix.M11, at.Matrix.M21, at.Matrix.M31)); // X-axis
-                                CreateAxis2Placement3D(location, axis, refDir, $"PlacementForTransform{at.Index}");
-                            }
-                            // Add more types as needed
-                        }
+                        allAcisBodies.AddRange(AcisUtils.GetBodies(acisReader));
                     }
                 }
             }
-            else
+
+            int partCounter = 0;
+            foreach (var body in allAcisBodies.Distinct())
             {
-                 Logger.Warning("StepConverterUtils.Export: No ACIS model or segments provided for export. Creating default point.");
-                 CreateCartesianPoint(new Vector3(10,20,30), "DefaultTestPointNoModel");
+                partCounter++;
+                string partId = $"{Path.GetFileNameWithoutExtension(originalFileName)}_part{partCounter}";
+                string partName = $"Part_{body.Index}";
+
+                var partProduct = CreateProduct(partId, partName, $"Canonical product for ACIS body {body.Index}", new List<ProductContext>());
+                var partProductContext = CreateProductContext(partProduct, appContext, "mechanical", $"Ctx_{partName}");
+                partProduct.FrameOfReference.Add(partProductContext);
+
+                var partFormation = CreateProductDefinitionFormation(partProduct, "_formation", $"Formation_{partName}");
+                var partDefContext = CreateProductDefinitionContext(appContext, "design", $"DesignCtx_{partName}");
+                var partProdDef = CreateProductDefinition(partProduct, partFormation, partDefContext, "_definition", $"Def_{partName}");
+                var partPDS = CreateProductDefinitionShape(partProdDef, $"Shape_{partName}", $"Shape of {partName}");
+
+                List<StepEntity> shellsForThisBody = new List<StepEntity>();
+                bool bodyIsLikelySolid = true; // Assume solid unless an open shell is found
+
+                var lumps = body.GetLumps();
+                if (!lumps.Any()) bodyIsLikelySolid = false; // No lumps means no solid
+
+                foreach (var lump in lumps)
+                {
+                    List<AcisFace> allLumpFaces = new List<AcisFace>();
+                    var acisShellsInLump = lump.GetShells();
+                    if (!acisShellsInLump.Any())
+                    {
+                        // If a lump has no shells, it might indicate non-solid or empty geometry for this part of the body
+                        bodyIsLikelySolid = false;
+                        continue;
+                    }
+
+                    foreach (var acisShell in acisShellsInLump)
+                    {
+                        allLumpFaces.AddRange(acisShell.GetFaces());
+                    }
+
+                    if (!allLumpFaces.Any())
+                    {
+                        bodyIsLikelySolid = false; // No faces in this lump's shells
+                        continue;
+                    }
+
+                    // Attempt to create one shell per lump. If a body has multiple lumps, it will result in multiple shells in SBSM.
+                    // The heuristic bodyIsLikelySolid passed to CreateShellFromAcisFaces is an initial guess.
+                    StepEntity stepShell = CreateShellFromAcisFaces(allLumpFaces, null, bodyIsLikelySolid,
+                                                                    $"Shell_Lump_{lump.Index}_Body_{body.Index}", out bool createdClosedShell);
+
+                    if (stepShell != null)
+                    {
+                        shellsForThisBody.Add(stepShell);
+                        if (!createdClosedShell)
+                        {
+                            bodyIsLikelySolid = false; // If any shell created for a lump is not closed, the body isn't a single MSB.
+                        }
+                    }
+                    else // No shell could be created from this lump's faces
+                    {
+                        bodyIsLikelySolid = false;
+                    }
+                }
+
+                StepEntity canonicalShapeContent;
+                if (bodyIsLikelySolid && shellsForThisBody.Count == 1 && shellsForThisBody[0] is ClosedShell closedOuterShell)
+                {
+                    canonicalShapeContent = CreateManifoldSolidBRep(closedOuterShell, $"MSB_Body_{body.Index}");
+                }
+                else
+                {
+                    if (bodyIsLikelySolid && shellsForThisBody.Count > 1)
+                    {
+                        Logger.Info($"Body {body.Index} resulted in multiple shells ({shellsForThisBody.Count}) but was initially considered solid. Creating ShellBasedSurfaceModel.");
+                    }
+                    else if (bodyIsLikelySolid && shellsForThisBody.Any() && !(shellsForThisBody[0] is ClosedShell))
+                    {
+                         Logger.Info($"Body {body.Index} resulted in an open shell but was initially considered solid. Creating ShellBasedSurfaceModel.");
+                    }
+                    canonicalShapeContent = CreateShellBasedSurfaceModel(shellsForThisBody, defaultRepContext, $"SBSM_Body_{body.Index}");
+                }
+
+                var canonicalSDR = CreateShapeDefinitionRepresentation(partPDS, canonicalShapeContent, $"SDR_{partName}");
+                bodyToProductDataMap[body] = (partProduct, partProdDef, partPDS, canonicalSDR, canonicalShapeContent);
             }
 
-            // Export all registered DATA entities that were created
+            // --- Assembly Definition ---
+            string asmFileId = Path.GetFileNameWithoutExtension(originalFileName);
+            string asmProdId = $"{asmFileId}_assembly_product";
+            string asmName = $"{asmFileId}_Assembly";
+
+            // Use the generated productDescription for the assembly product
+            var asmProduct = CreateProduct(asmProdId, asmName, productDescription, new List<ProductContext>());
+            var asmProductContext = CreateProductContext(asmProduct, appContext, "mechanical", $"Ctx_{asmName}");
+            asmProduct.FrameOfReference.Add(asmProductContext);
+
+            var asmFormation = CreateProductDefinitionFormation(asmProduct, "_asm_formation", $"Formation_{asmName}");
+            var asmDefContext = CreateProductDefinitionContext(appContext, "design", $"DesignCtx_{asmName}");
+            var asmProdDef = CreateProductDefinition(asmProduct, asmFormation, asmDefContext, "_asm_definition", $"Def_{asmName}");
+            var asmPDS = CreateProductDefinitionShape(asmProdDef, $"Shape_{asmName}", $"Shape of assembly {asmName}");
+
+            List<StepEntity> assemblyRootShapeItems = new List<StepEntity>(); // Items for the assembly's root shape representation
+
+            // --- Instancing (Loop 2) ---
+            int instanceCounter = 0;
+            foreach (var body in allAcisBodies)
+            {
+                instanceCounter++;
+                if (!bodyToProductDataMap.TryGetValue(body, out var productData)) // productData includes partPDS now
+                {
+                    Logger.Warning($"Could not find canonical product data for ACIS body {body.Index} during instancing. Skipping.");
+                    continue;
+                }
+
+                Matrix4x4? bodyTransformMatrix = body.TransformEntity?.Matrix;
+                string instanceNameSuffix = $"_Instance{instanceCounter}_Body{body.Index}";
+
+                StepEntity representationInAssemblyContext;
+                ShapeDefinitionRepresentation sdrForThisInstanceOfPart;
+
+                if (bodyTransformMatrix.HasValue && !bodyTransformMatrix.Value.IsIdentity)
+                {
+                    var stepTransformAxisPlacement = CreateAxis2Placement3D(bodyTransformMatrix.Value, $"Placement{instanceNameSuffix}");
+                    var repMap = CreateRepresentationMap(stepTransformAxisPlacement, productData.CanonicalShapeContent, $"Map{instanceNameSuffix}");
+                    var mappedItem = CreateMappedItem(repMap, productData.CanonicalSDR, $"MappedItem{instanceNameSuffix}");
+
+                    representationInAssemblyContext = mappedItem;
+
+                    // Create an instance-specific SHAPE_REPRESENTATION containing just this MAPPED_ITEM
+                    var instanceSpecificRepItems = new List<StepEntity> { mappedItem };
+                    // This AssemblyShapeRepresentation is for the instance, not the whole assembly.
+                    // It uses the same defaultRepContext as the canonical part's shape.
+                    var instanceShapeRep = CreateAssemblyShapeRepresentation(instanceSpecificRepItems, defaultRepContext, $"Rep_Inst{instanceNameSuffix}");
+                    sdrForThisInstanceOfPart = CreateShapeDefinitionRepresentation(productData.PDS, instanceShapeRep, $"SDR_Inst{instanceNameSuffix}");
+                }
+                else
+                {
+                    // No transform or identity transform: use the canonical shape directly in the assembly's items.
+                    representationInAssemblyContext = productData.CanonicalShapeContent;
+                    sdrForThisInstanceOfPart = productData.CanonicalSDR; // Use the canonical SDR for CDSR link
+                }
+
+                assemblyRootShapeItems.Add(representationInAssemblyContext);
+
+                // Create NAUO to establish product hierarchy
+                string nauoInstanceId = $"NAUO_Instance_{instanceCounter}";
+                string nauoInstanceName = $"Usage_of_{productData.Product.Name}_in_{asmName}";
+                string nauoDescription = $"This is instance {instanceCounter} of part {productData.Product.Name}";
+                var nauo = CreateNextAssemblyUsageOccurrence(asmProdDef, productData.ProdDef, nauoInstanceId, nauoInstanceName, nauoDescription);
+
+                // Create CDSR to link the NAUO's component PDS to its specific representation in this assembly context
+                CreateContextDependentShapeRepresentation(sdrForThisInstanceOfPart, productData.PDS, $"CDSR{instanceNameSuffix}");
+            }
+
+            // --- Finalize Assembly SDR ---
+            // The assembly's root shape representation contains all MAPPED_ITEMs or direct canonical shapes.
+            AssemblyShapeRepresentation assemblyRootShapeRep = CreateAssemblyShapeRepresentation(assemblyRootShapeItems, defaultRepContext, $"AsmRootRep_{asmName}");
+            ShapeDefinitionRepresentation assemblyMasterSDR = CreateShapeDefinitionRepresentation(asmPDS, assemblyRootShapeRep, $"MasterSDR_{asmName}");
+
+
+            // Export all registered DATA entities
             foreach (var entity in _allExportedEntities)
             {
                 stepBuilder.Append(entity.ExportStep());
@@ -789,11 +1294,40 @@ namespace InventorLoaderCs
             string key = $"EC_{startVp?.Id}_{endVp?.Id}_{curveGeom?.Id}_{sense}";
              if (useCache && _edgeCurves.TryGetValue(key, out var ec))
             {
+                // Potentially apply style even to cached edge if style wasn't part of its original creation key
+                // For now, style is applied on new creation.
                 return ec;
             }
-            ec = new EdgeCurve(name, startVp, endVp, curveGeom, sense);
-            if (useCache) _edgeCurves[key] = ec;
-            return ec;
+            var stepEdgeCurve = new EdgeCurve(name, startVp, endVp, curveGeom, sense);
+            if (useCache) _edgeCurves[key] = stepEdgeCurve;
+
+            // Apply styles if attributes exist
+            if (acisEdge.AttribList != null)
+            {
+                foreach (var attr in acisEdge.AttribList)
+                {
+                    if (attr is AttribStRgbColor colorAttr)
+                    {
+                        // Convert 0-1 double to 0-255 byte for CreateColourRgb if its signature expects that,
+                        // or adjust CreateColourRgb to take doubles. Assuming CreateColourRgb takes doubles 0-1.
+                        ColourRgb stepColor = CreateColourRgb(colorAttr.Red, colorAttr.Green, colorAttr.Blue, $"Color_Edge_{acisEdge.Index}");
+                        CurveStyle curveStyle = CreateCurveStyle(stepColor, null, $"Style_Edge_{acisEdge.Index}"); // width = null for now
+
+                        // PresentationStyleAssignment expects a list of styles.
+                        // CurveStyle is a "PRESENTATION_STYLE_SELECT" item.
+                        // For AP203/214, CURVE_STYLE is usually part of PRESENTATION_STYLE_ASSIGNMENT.
+                        var stylesForPsa = new List<StepEntity> { curveStyle };
+                        PresentationStyleAssignment psa = CreatePresentationStyleAssignment(stylesForPsa, $"PSA_Edge_{acisEdge.Index}");
+
+                        var styledItemStyles = new List<StepEntity> { psa }; // STYLED_ITEM takes a list of PRESENTATION_STYLE_ASSIGNMENT
+                        CreateStyledItem($"StyledEdge_{acisEdge.Index}", styledItemStyles, stepEdgeCurve);
+
+                        break; // Apply first color found, for simplicity
+                    }
+                    // Add checks for other style attributes if needed (e.g., line width, font)
+                }
+            }
+            return stepEdgeCurve;
         }
 
         public static OrientedEdge CreateOrientedEdge(AcisCoEdge acisCoEdge, string name = "", bool useCache = true)
@@ -1260,6 +1794,334 @@ namespace InventorLoaderCs
         }
 
 
+        // Overload for creating Axis2Placement3D from a Matrix4x4
+        public static Axis2Placement3D CreateAxis2Placement3D(Matrix4x4 matrix, string name = "", bool useCache = true)
+        {
+            Vector3 location = matrix.Translation;
+
+            // Extract rotation part of the matrix to transform direction vectors
+            Matrix4x4 rotationMatrix = matrix;
+            rotationMatrix.Translation = Vector3.Zero; // Remove translation part
+
+            Vector3 zAxis = Vector3.TransformNormal(Vector3.UnitZ, rotationMatrix);
+            Vector3 xAxis = Vector3.TransformNormal(Vector3.UnitX, rotationMatrix);
+
+            // Ensure Axis and RefDirection are not collinear, and RefDirection is perpendicular to Axis
+            // This is a simplified approach; robust orthogonalization might be needed.
+            if (Vector3.Dot(zAxis, xAxis) > 0.999 || Vector3.Dot(zAxis, xAxis) < -0.999) // Check if nearly collinear
+            {
+                // If Z' and X' are collinear, pick Y' as ref_dir if possible
+                xAxis = Vector3.TransformNormal(Vector3.UnitY, rotationMatrix);
+                if (Vector3.Dot(zAxis, xAxis) > 0.999 || Vector3.Dot(zAxis, xAxis) < -0.999)
+                {
+                    // If Z' and Y' are also collinear (shouldn't happen if Z' is valid),
+                    // use an arbitrary perpendicular for xAxis.
+                    xAxis = AcisUtils.GetArbitraryAxis(zAxis); // Assumes AcisUtils.GetArbitraryAxis exists
+                }
+            }
+
+            // Ensure RefDirection is perpendicular to Axis (Gram-Schmidt simplified)
+            xAxis = Vector3.Normalize(xAxis - Vector3.Dot(xAxis, Vector3.Normalize(zAxis)) * Vector3.Normalize(zAxis));
+
+
+            return CreateAxis2Placement3D(location, Vector3.Normalize(zAxis), Vector3.Normalize(xAxis), name, useCache);
+        }
+
+        // --- Factory Methods for Product Definition Entities ---
+
+        public static ApplicationContext CreateApplicationContext(string description, string name = "", bool useCache = true)
+        {
+            // Name for ApplicationContext is often fixed or derived, description is key.
+            string defaultedName = string.IsNullOrEmpty(name) ? "Application Context" : name;
+            string key = $"APPCTX_{defaultedName}_{description}";
+            if (useCache && _applicationContexts.TryGetValue(key, out var ctx)) return ctx;
+
+            var newCtx = new ApplicationContext(defaultedName, description);
+            if (useCache) _applicationContexts[key] = newCtx;
+            return newCtx;
+        }
+
+        public static ProductContext CreateProductContext(Product product, ApplicationContext appCtx, string discipline, string name = "", bool useCache = true)
+        {
+            string defaultedName = string.IsNullOrEmpty(name) ? $"ProductContextFor_{product.ProductId}" : name;
+            string key = $"PRODCTX_{defaultedName}_{appCtx.Id}_{discipline}";
+            if (useCache && _productContexts.TryGetValue(key, out var pCtx)) return pCtx;
+
+            var newPCtx = new ProductContext(defaultedName, appCtx, discipline);
+            if (useCache) _productContexts[key] = newPCtx;
+            return newPCtx;
+        }
+
+        public static Product CreateProduct(string id, string productName, string description, List<ProductContext> contexts, string name = "", bool useCache = true)
+        {
+            string defaultedName = string.IsNullOrEmpty(name) ? productName : name; // Use productName for STEP name if 'name' (for entity label) is empty
+            string key = $"PROD_{id}_{defaultedName}";
+            if (useCache && _products.TryGetValue(key, out var prod)) return prod;
+
+            var newProd = new Product(defaultedName, id, description, contexts);
+            if (useCache) _products[key] = newProd;
+            return newProd;
+        }
+
+        public static ProductDefinitionFormation CreateProductDefinitionFormation(Product product, string idSuffix = "_formation", string name = "", bool useCache = true)
+        {
+            string formationId = product.ProductId + idSuffix;
+            string defaultedName = string.IsNullOrEmpty(name) ? $"FormationFor_{product.ProductId}" : name;
+            string key = $"PRODDEFFORM_{formationId}";
+            if (useCache && _productDefinitionFormations.TryGetValue(key, out var pdf)) return pdf;
+
+            var newPdf = new ProductDefinitionFormation(defaultedName, formationId, product);
+            if (useCache) _productDefinitionFormations[key] = newPdf;
+            return newPdf;
+        }
+
+        public static ProductDefinitionContext CreateProductDefinitionContext(ApplicationContext appCtx, string lifeCycleStage, string name = "", bool useCache = true)
+        {
+            string defaultedName = string.IsNullOrEmpty(name) ? $"ProductDefContext_{lifeCycleStage}" : name;
+            string key = $"PRODDEFCTX_{defaultedName}_{appCtx.Id}_{lifeCycleStage}";
+            if (useCache && _productDefinitionContexts.TryGetValue(key, out var pdCtx)) return pdCtx;
+
+            var newPdCtx = new ProductDefinitionContext(defaultedName, appCtx, lifeCycleStage);
+            if (useCache) _productDefinitionContexts[key] = newPdCtx;
+            return newPdCtx;
+        }
+
+        public static ProductDefinition CreateProductDefinition(Product product, ProductDefinitionFormation formation, ProductDefinitionContext context, string idSuffix = "_definition", string name = "", bool useCache = true)
+        {
+            string definitionId = product.ProductId + idSuffix;
+            string defaultedName = string.IsNullOrEmpty(name) ? $"DefinitionFor_{product.ProductId}" : name;
+            string key = $"PRODDEF_{definitionId}";
+            if (useCache && _productDefinitions.TryGetValue(key, out var pd)) return pd;
+
+            var newPd = new ProductDefinition(defaultedName, definitionId, formation, context);
+            if (useCache) _productDefinitions[key] = newPd;
+            return newPd;
+        }
+
+        public static ProductDefinitionShape CreateProductDefinitionShape(ProductDefinition prodDef, string name = "", string description = "", bool useCache = true)
+        {
+            string defaultedName = string.IsNullOrEmpty(name) ? $"ShapeOf_{prodDef.DefinitionId}" : name;
+            string defaultedDescription = string.IsNullOrEmpty(description) ? "Main shape" : description;
+            string key = $"PDSHAPE_{defaultedName}_{prodDef.Id}";
+            if (useCache && _productDefinitionShapes.TryGetValue(key, out var pds)) return pds;
+
+            var newPds = new ProductDefinitionShape(defaultedName, defaultedDescription, prodDef);
+            if (useCache) _productDefinitionShapes[key] = newPds;
+            return newPds;
+        }
+
+        public static ShapeDefinitionRepresentation CreateShapeDefinitionRepresentation(ProductDefinitionShape pds, StepEntity shapeRep, string name = "", bool useCache = true)
+        {
+            // Name for SHAPE_DEFINITION_REPRESENTATION is often context-specific or empty.
+            string defaultedName = string.IsNullOrEmpty(name) ? $"ShapeRepFor_{pds.Name}" : name;
+            string key = $"SHAPEDEFREP_{defaultedName}_{pds.Id}_{shapeRep.Id}";
+            if (useCache && _shapeDefinitionRepresentations.TryGetValue(key, out var sdr)) return sdr;
+
+            var newSdr = new ShapeDefinitionRepresentation(defaultedName, pds, shapeRep);
+            if (useCache) _shapeDefinitionRepresentations[key] = newSdr;
+            return newSdr;
+        }
+
+
+        // --- Factory Methods for Styles (continued) ---
+        public static CurveStyle CreateCurveStyle(ColourRgb color, double? width, string name = "", bool useCache = true)
+        {
+            object widthObj = width.HasValue ? (object)width.Value : new StepDollarNotApplicable();
+            // Key needs to account for width presence/absence
+            string widthKey = width.HasValue ? width.Value.ToString("F8", CultureInfo.InvariantCulture) : "$";
+            string key = $"CRVSTYLE_{name}_{color.Id}_{widthKey}";
+
+            if (useCache && _curveStyles.TryGetValue(key, out var style)) return style;
+
+            var newStyle = new CurveStyle(name, color, widthObj);
+            if (useCache) _curveStyles[key] = newStyle;
+            return newStyle;
+        }
+
+        // CreatePresentationStyleAssignment might already exist or needs to be verified/added if not.
+        // Assuming it exists based on previous subtasks involving surface styles.
+        // If not, it would be:
+        /*
+        public static PresentationStyleAssignment CreatePresentationStyleAssignment(List<StepEntity> styles, string name = "", bool useCache = true)
+        {
+            // Simplified key
+            string key = $"PSA_{name}_{styles.FirstOrDefault()?.Id}_{styles.Count}";
+            if(useCache && _presentationStyleAssignments.TryGetValue(key, out var psa)) return psa;
+
+            var newPsa = new PresentationStyleAssignment(styles); // Name is not part of PSA entity in STEP
+            if(useCache) _presentationStyleAssignments[key] = newPsa;
+            return newPsa;
+        }
+        */
+
+        // --- Factory Methods for Assembly Entities ---
+
+        public static RepresentationContext CreateRepresentationContext(string contextType, string name = "DefaultContext", bool useCache = true)
+        {
+            string key = $"REPCTX_{name}_{contextType}";
+            if (useCache && _representationContexts.TryGetValue(key, out var ctx)) return ctx;
+
+            var newCtx = new RepresentationContext(name, contextType);
+            if (useCache) _representationContexts[key] = newCtx;
+            return newCtx;
+        }
+
+        public static RepresentationMap CreateRepresentationMap(Axis2Placement3D mappingOrigin, StepEntity mappedRepresentation, string name = "", bool useCache = true)
+        {
+            string defaultedName = string.IsNullOrEmpty(name) ? $"MapForRep{mappedRepresentation.Id}" : name;
+            string key = $"REPMAP_{defaultedName}_{mappingOrigin.Id}_{mappedRepresentation.Id}";
+            if (useCache && _representationMaps.TryGetValue(key, out var map)) return map;
+
+            var newMap = new RepresentationMap(defaultedName, mappingOrigin, mappedRepresentation);
+            if (useCache) _representationMaps[key] = newMap;
+            return newMap;
+        }
+
+        public static MappedItem CreateMappedItem(RepresentationMap mappingSource, ShapeDefinitionRepresentation mappingTarget, string name = "", bool useCache = true)
+        {
+            string defaultedName = string.IsNullOrEmpty(name) ? $"MappedItem_{mappingSource.Id}_{mappingTarget.Id}" : name;
+            string key = $"MAPPEDITEM_{defaultedName}"; // Name should be unique enough for cache key if used
+            if (useCache && _mappedItems.TryGetValue(key, out var item)) return item;
+
+            var newItem = new MappedItem(defaultedName, mappingSource, mappingTarget);
+            if (useCache) _mappedItems[key] = newItem;
+            return newItem;
+        }
+
+        public static AssemblyShapeRepresentation CreateAssemblyShapeRepresentation(List<StepEntity> items, RepresentationContext context, string name = "", bool useCache = true)
+        {
+            string defaultedName = string.IsNullOrEmpty(name) ? "AssemblyRepresentation" : name;
+            // Cache key for a list-based entity can be tricky. Using context and first item id if present.
+            string listIndicator = items.Any() ? items.First().Id.ToString() : "empty";
+            string key = $"ASMREPSHAPE_{defaultedName}_{context.Id}_{items.Count}_{listIndicator}";
+            if (useCache && _assemblyShapeRepresentations.TryGetValue(key, out var rep)) return rep;
+
+            var newRep = new AssemblyShapeRepresentation(defaultedName, items, context);
+            if (useCache) _assemblyShapeRepresentations[key] = newRep;
+            return newRep;
+        }
+
+
+        public static NextAssemblyUsageOccurrence CreateNextAssemblyUsageOccurrence(
+            ProductDefinition assemblyDef, ProductDefinition componentDef,
+            string instanceId, string instanceName = "", string description = "", string refDes = "",
+            bool useCache = true)
+        {
+            string defaultedName = string.IsNullOrEmpty(instanceName) ? $"Instance_{instanceId}" : instanceName;
+            string defaultedDescription = string.IsNullOrEmpty(description) ? $"Occurrence of {componentDef.Name} in {assemblyDef.Name}" : description;
+
+            // Key for NAUO should uniquely identify the parent-child-instance relationship
+            string key = $"NAUO_{assemblyDef.Id}_{componentDef.Id}_{instanceId}";
+            if (useCache && _nauos.TryGetValue(key, out var nauo)) return nauo;
+
+            var newNauo = new NextAssemblyUsageOccurrence(defaultedName, instanceId, defaultedDescription, assemblyDef, componentDef, refDes);
+            if (useCache) _nauos[key] = newNauo;
+            return newNauo;
+        }
+
+
+        public static ContextDependentShapeRepresentation CreateContextDependentShapeRepresentation(
+            ShapeDefinitionRepresentation shapeRepInContext, ProductDefinitionShape definingPds,
+            string name = "", bool useCache = true)
+        {
+            string defaultedName = string.IsNullOrEmpty(name) ? $"CDSR_ForSDR{shapeRepInContext.Id}_PDS{definingPds.Id}" : name;
+            string key = $"CDSR_{shapeRepInContext.Id}_{definingPds.Id}"; // Key based on the two main linked entities
+            if (useCache && _cdsr.TryGetValue(key, out var cdsr)) return cdsr;
+
+            var newCdsr = new ContextDependentShapeRepresentation(defaultedName, shapeRepInContext, definingPds);
+            if (useCache) _cdsr[key] = newCdsr;
+            return newCdsr;
+        }
+
+
+        // --- Factory methods for MSB/SBSM and Shells ---
+
+        public static OpenShell CreateOpenShell(List<AdvancedFace> faces, string name = "", bool useCache = true)
+        {
+            // Simplified cache key for example; a more robust key would consider face IDs.
+            string key = $"OS_{name}_{faces.Count}_{faces.FirstOrDefault()?.Id}";
+            if (useCache && _openShells.TryGetValue(key, out var shell)) return shell;
+
+            var newShell = new OpenShell(name, faces);
+            if (useCache) _openShells[key] = newShell;
+            return newShell;
+        }
+
+        public static ClosedShell CreateClosedShell(List<AdvancedFace> faces, string name = "", bool useCache = true)
+        {
+            // Simplified cache key
+            string key = $"CS_{name}_{faces.Count}_{faces.FirstOrDefault()?.Id}";
+            // Note: _openShells can store ClosedShell instances as ClosedShell derives from OpenShell.
+            if (useCache && _openShells.TryGetValue(key, out var shell) && shell is ClosedShell closedShell) return closedShell;
+
+            var newShell = new ClosedShell(name, faces);
+            if (useCache) _openShells[key] = newShell; // Store in _openShells cache
+            return newShell;
+        }
+
+        // New helper method
+        public static StepEntity CreateShellFromAcisFaces(IEnumerable<AcisFace> acisFaces, Matrix4x4? worldTransform,
+                                                          bool attemptClosedShell, string name, out bool wasClosed, bool useCache = true)
+        {
+            wasClosed = false;
+            var advFaces = new List<AdvancedFace>();
+            foreach (var acisFace in acisFaces)
+            {
+                // Pass the worldTransform to CreateAdvancedFace if faces can be transformed individually.
+                // For canonical part representations, worldTransform should be null here.
+                var advFace = CreateAdvancedFace(acisFace, worldTransform, false, $"{name}_face{advFaces.Count}", useCache);
+                if (advFace != null) advFaces.Add(advFace);
+            }
+
+            if (!advFaces.Any())
+            {
+                Logger.Warning($"CreateShellFromAcisFaces: No advanced faces created for shell '{name}'. Returning null.");
+                return null;
+            }
+
+            if (attemptClosedShell) // Heuristic: if we're trying for a solid and got faces
+            {
+                // Simple heuristic: if it's supposed to be closed and we have faces, assume it is for now.
+                // Real check would involve analyzing edge sharing, manifoldness, etc.
+                wasClosed = true;
+                return CreateClosedShell(advFaces, name, useCache);
+            }
+            else
+            {
+                return CreateOpenShell(advFaces, name, useCache);
+            }
+        }
+
+
+        public static ManifoldSolidBRep CreateManifoldSolidBRep(ClosedShell outerShell, string name = "", bool useCache = true)
+        {
+            // MSBs are typically unique by their shell.
+            string key = $"MSB_{name}_{outerShell.Id}";
+            if (useCache && _manifoldSolidBReps.TryGetValue(key, out var msb)) return msb;
+
+            var newMsb = new ManifoldSolidBRep(name, outerShell);
+            if (useCache) _manifoldSolidBReps[key] = newMsb;
+            return newMsb;
+        }
+
+        // Modified CreateShellBasedSurfaceModel to accept List<StepEntity> for shells
+        public static ShellBasedSurfaceModel CreateShellBasedSurfaceModel(List<StepEntity> shells, RepresentationContext context, string name = "", bool useCache = true)
+        {
+            // SBSMs are typically unique by their constituent shells and context.
+            // Simplified cache key:
+            string listIndicator = shells.Any() ? shells.First().Id.ToString() : "empty";
+            string key = $"SBSM_{name}_{context.Id}_{shells.Count}_{listIndicator}";
+            if (useCache && _shellBasedSurfaceModels.TryGetValue(key, out var sbsm)) return sbsm;
+
+            // Cast shells to OpenShell if necessary, or ensure ShellBasedSurfaceModel handles List<StepEntity> correctly.
+            // For now, assuming ShellBasedSurfaceModel's constructor and Items property can handle List<StepEntity>
+            // where items are expected to be OpenShell or ClosedShell.
+            var newSbsm = new ShellBasedSurfaceModel(name, shells.OfType<OpenShell>().ToList(), context); // Constructor expects List<OpenShell>
+            if (useCache) _shellBasedSurfaceModels[key] = newSbsm;
+            return newSbsm;
+        }
+
+
         // --- Formatting Utilities ---
         public static string DoubleToString(double d)
         {
@@ -1294,6 +2156,7 @@ namespace InventorLoaderCs
             if (o is StepEntity se) return se.ToString();
             if (o is AcisStepAnyEntity any) return any.ToString();
             if (o is StepEnumWrapper sew) return sew.ToString();
+            if (o is StepDollarNotApplicable) return "$"; // Added handler for $
             if (o is Enum e) return $".{e.ToString().ToUpperInvariant()}.";
             if (o is IEnumerable<object> list) // Catches List<double>, List<CartesianPoint>, etc.
             {

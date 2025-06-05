@@ -1352,5 +1352,399 @@ namespace InventorLoaderCs.Tests
 
             Logger.Info("Test: TestExportStep_BSplineSurfaceWithKnots_FormatsCorrectly PASSED");
         }
+
+        public void TestCreateAndExport_StyledItem_WithCurveStyle()
+        {
+            TestInitialize(); // Resets caches, sets up mock reader
+            int entityIdCounter = 1;
+
+            // 1. Create AcisEdge with color attribute
+            var p1 = new AcisPoint(0,0,0);
+            var p2 = new AcisPoint(10,0,0);
+            var v1 = new AcisVertex(p1);
+            var v2 = new AcisVertex(p2);
+            var acisCurve = new AcisCurveStraight(p1.Position, p2.Position - p1.Position);
+            var acisEdge = new AcisEdge(v1, v2, acisCurve) { Index = 777 }; // Give it an index for easier identification in logs/names
+
+            var colorAttr = new AttribStRgbColor(0.8, 0.2, 0.1) { Name = "EdgeColorReddish" }; // R, G, B
+            acisEdge.AttribList = new List<AcisAttribute> { colorAttr };
+
+            // Mocking the reader to return this attribute if CreateEdgeCurve tries to look it up via record
+            // However, CreateEdgeCurve was modified to check acisEdge.AttribList directly.
+            // So, direct assignment to AttribList is sufficient.
+
+            // 2. Call CreateEdgeCurve - this should trigger style creation
+            var stepEdgeCurve = StepConverterUtils.CreateEdgeCurve(acisEdge, null, $"StyledTestEdge_{acisEdge.Index}");
+            Assert.IsNotNull(stepEdgeCurve, "STEP EdgeCurve should not be null.");
+
+            // 3. Retrieve created style entities from the global list
+            // This is a bit indirect but necessary if CreateEdgeCurve doesn't return them all.
+            var allEntities = StepConverterUtils.GetAllExportedEntities();
+
+            StyledItem styledItem = allEntities.OfType<StyledItem>().FirstOrDefault(si => si.Item == stepEdgeCurve);
+            Assert.IsNotNull(styledItem, "StyledItem for EdgeCurve not found.");
+
+            PresentationStyleAssignment psa = styledItem?.Styles.OfType<PresentationStyleAssignment>().FirstOrDefault();
+            Assert.IsNotNull(psa, "PresentationStyleAssignment not found in StyledItem.");
+
+            CurveStyle curveStyle = psa?.Styles.OfType<CurveStyle>().FirstOrDefault();
+            Assert.IsNotNull(curveStyle, "CurveStyle not found in PresentationStyleAssignment.");
+
+            ColourRgb colourRgb = curveStyle?.CurveColour;
+            Assert.IsNotNull(colourRgb, "ColourRgb not found in CurveStyle.");
+
+            // 4. Manually assign IDs for predictable output
+            colourRgb.Id = entityIdCounter++;
+            // CurveStyle's width is StepDollarNotApplicable, which doesn't have an ID.
+            curveStyle.Id = entityIdCounter++;
+            psa.Id = entityIdCounter++;
+            stepEdgeCurve.VertexGeometryStart.Id = entityIdCounter++; // CartesianPoint for start
+            stepEdgeCurve.VertexGeometryEnd.Id = entityIdCounter++;   // CartesianPoint for end
+            stepEdgeCurve.EdgeStart.Id = entityIdCounter++;           // VertexPoint for start
+            stepEdgeCurve.EdgeEnd.Id = entityIdCounter++;             // VertexPoint for end
+            stepEdgeCurve.CurveGeometry.Position.Id = entityIdCounter++; // Axis2Placement3D for line
+            stepEdgeCurve.CurveGeometry.Position.Location.Id = entityIdCounter++; // CP for line origin
+            stepEdgeCurve.CurveGeometry.Position.Axis.Id = entityIdCounter++; // Dir for line axis
+            stepEdgeCurve.CurveGeometry.Position.RefDirection.Id = entityIdCounter++; // Dir for line ref_dir
+            (stepEdgeCurve.CurveGeometry as Line).Pnt.Id = entityIdCounter++; // CartesianPoint for line pnt (might be same as start_v geom)
+            (stepEdgeCurve.CurveGeometry as Line).Dir.Orientation.Id = entityIdCounter++; // Direction for line vec orientation
+            (stepEdgeCurve.CurveGeometry as Line).Dir.Id = entityIdCounter++; // Vector for line dir
+            stepEdgeCurve.CurveGeometry.Id = entityIdCounter++;       // Line
+            styledItem.Item.Id = stepEdgeCurve.Id; // Ensure this is the same ID (it is the same object)
+            styledItem.Id = entityIdCounter++;
+
+
+            // 5. ExportStep and Validate STEP string snippets
+            string edgeStr = stepEdgeCurve.ExportStep(ref entityIdCounter); // Will also export sub-entities if not already
+            string colorStr = colourRgb.ExportStep(ref entityIdCounter);
+            string curveStyleStr = curveStyle.ExportStep(ref entityIdCounter);
+            string psaStr = psa.ExportStep(ref entityIdCounter);
+            string styledItemStr = styledItem.ExportStep(ref entityIdCounter);
+
+            // Basic checks for presence and references
+            Assert.IsTrue(styledItemStr.Contains($"STYLED_ITEM('{styledItem.Name}',(#{psa.Id}),#{stepEdgeCurve.Id})"), "StyledItem string format/references incorrect.");
+            Assert.IsTrue(psaStr.Contains($"PRESENTATION_STYLE_ASSIGNMENT((#{curveStyle.Id}))"), "PSA string format/references incorrect.");
+            Assert.IsTrue(curveStyleStr.Contains($"CURVE_STYLE('{curveStyle.Name}',$,#{colourRgb.Id},$)"), "CurveStyle string format/references incorrect (width $).");
+            Assert.IsTrue(colorStr.Contains($"COLOUR_RGB('{colourRgb.Name}',{StepConverterUtils.FormatDouble(0.8)},{StepConverterUtils.FormatDouble(0.2)},{StepConverterUtils.FormatDouble(0.1)})"), "ColourRgb string format/values incorrect.");
+
+            Logger.Info("Test: TestCreateAndExport_StyledItem_WithCurveStyle PASSED");
+        }
+
+        public void TestCreateAndExport_StyledItem_WithSurfaceStyle()
+        {
+            TestInitialize();
+            int entityIdCounter = 100; // Start higher to avoid collision with curve style test IDs if run together without reset
+
+            // 1. Create AcisFace with color attribute
+            var planeOrigin = new AcisPoint(0,0,0);
+            var planeNormal = new Vector3(0,0,1);
+            var acisSurfacePlane = new AcisSurfacePlane(planeOrigin.Position, planeNormal) { Index = 800 };
+
+            // Create a simple square loop for the face
+            var p0 = new AcisPoint(0,0,0); var v0 = new AcisVertex(p0);
+            var p1 = new AcisPoint(10,0,0);var v1 = new AcisVertex(p1);
+            var p2 = new AcisPoint(10,10,0);var v2 = new AcisVertex(p2);
+            var p3 = new AcisPoint(0,10,0); var v3 = new AcisVertex(p3);
+
+            var c01 = new AcisCurveStraight(p0.Position, p1.Position-p0.Position);
+            var c12 = new AcisCurveStraight(p1.Position, p2.Position-p1.Position);
+            var c23 = new AcisCurveStraight(p2.Position, p3.Position-p2.Position);
+            var c30 = new AcisCurveStraight(p3.Position, p0.Position-p3.Position);
+
+            var e01 = new AcisEdge(v0,v1,c01); var e12 = new AcisEdge(v1,v2,c12);
+            var e23 = new AcisEdge(v2,v3,c23); var e30 = new AcisEdge(v3,v0,c30);
+
+            var co01 = new AcisCoEdge(e01, false); var co12 = new AcisCoEdge(e12, false);
+            var co23 = new AcisCoEdge(e23, false); var co30 = new AcisCoEdge(e30, false);
+            co01.NextCoedge = co12; co12.NextCoedge = co23; co23.NextCoedge = co30; co30.NextCoedge = co01; // Link loop
+
+            var acisLoop = new AcisLoop(co01) { Index = 801 };
+            var acisFace = new AcisFace(acisSurfacePlane, acisLoop, false) { Index = 888 };
+
+            var colorAttr = new AttribStRgbColor(0.1, 0.8, 0.2) { Name = "FaceColorGreenish" };
+            acisFace.AttribList = new List<AcisAttribute> { colorAttr };
+
+            // 2. Call CreateAdvancedFace - this should trigger style creation
+            var stepFace = StepConverterUtils.CreateAdvancedFace(acisFace, null, false, $"StyledTestFace_{acisFace.Index}");
+            Assert.IsNotNull(stepFace, "STEP AdvancedFace should not be null.");
+
+            // 3. Retrieve created style entities
+            var allEntities = StepConverterUtils.GetAllExportedEntities();
+            StyledItem styledItem = allEntities.OfType<StyledItem>().FirstOrDefault(si => si.Item == stepFace);
+            Assert.IsNotNull(styledItem, "StyledItem for AdvancedFace not found.");
+
+            PresentationStyleAssignment psa = styledItem?.Styles.OfType<PresentationStyleAssignment>().FirstOrDefault();
+            Assert.IsNotNull(psa, "PresentationStyleAssignment not found in StyledItem for face.");
+
+            SurfaceStyleUsage styleUsage = psa?.Styles.OfType<SurfaceStyleUsage>().FirstOrDefault();
+            Assert.IsNotNull(styleUsage, "SurfaceStyleUsage not found in PSA for face.");
+
+            SurfaceStyleFillArea fillArea = styleUsage?.Style as SurfaceStyleFillArea;
+            Assert.IsNotNull(fillArea, "SurfaceStyleFillArea not found in StyleUsage for face.");
+
+            ColourRgb colourRgb = fillArea?.FillArea;
+            Assert.IsNotNull(colourRgb, "ColourRgb not found in FillArea for face.");
+
+            // 4. Manually assign IDs (simplified for brevity, assuming sub-entities of face are also created and need IDs)
+            colourRgb.Id = entityIdCounter++;
+            fillArea.Id = entityIdCounter++;
+            styleUsage.Id = entityIdCounter++;
+            psa.Id = entityIdCounter++;
+            // ... IDs for face bounds, edge loop, oriented edges, edgecurves, vertexpoints, cartesianpoints, lines, placements ...
+            // This part is complex if we want to export the face fully. For this test, focus on style chain.
+            // We'll assign ID to the face itself, assuming its sub-components are handled by their own ExportStep calls.
+            stepFace.Id = entityIdCounter++;
+            styledItem.Item.Id = stepFace.Id; // Ensure correct reference
+            styledItem.Id = entityIdCounter++;
+
+
+            // 5. ExportStep and Validate STEP string snippets
+            string faceStr = stepFace.ExportStep(ref entityIdCounter); // This will be large if all geometry is exported
+            string colorStr = colourRgb.ExportStep(ref entityIdCounter);
+            string fillAreaStr = fillArea.ExportStep(ref entityIdCounter);
+            string styleUsageStr = styleUsage.ExportStep(ref entityIdCounter);
+            string psaStr = psa.ExportStep(ref entityIdCounter);
+            string styledItemStr = styledItem.ExportStep(ref entityIdCounter);
+
+            Assert.IsTrue(styledItemStr.Contains($"STYLED_ITEM('{styledItem.Name}',(#{psa.Id}),#{stepFace.Id})"), "StyledItem string for face incorrect.");
+            Assert.IsTrue(psaStr.Contains($"PRESENTATION_STYLE_ASSIGNMENT((#{styleUsage.Id}))"), "PSA string for face incorrect.");
+            Assert.IsTrue(styleUsageStr.Contains($"SURFACE_STYLE_USAGE(.BOTH.,#{fillArea.Id})"), "SurfaceStyleUsage string incorrect."); // Assuming .BOTH. is default
+            Assert.IsTrue(fillAreaStr.Contains($"SURFACE_STYLE_FILL_AREA(#{colourRgb.Id})"), "SurfaceStyleFillArea string incorrect.");
+            Assert.IsTrue(colorStr.Contains($"COLOUR_RGB('{colourRgb.Name}',{StepConverterUtils.FormatDouble(0.1)},{StepConverterUtils.FormatDouble(0.8)},{StepConverterUtils.FormatDouble(0.2)})"), "ColourRgb for face style incorrect.");
+
+            Logger.Info("Test: TestExport_SimpleAcisModel_GeneratesValidStepFileStructure PASSED"); // Original test will be heavily modified.
+        }
+
+        public void TestExport_SimpleAssembly_GeneratesValidStepFileStructure() // Renamed for clarity
+        {
+            TestInitialize(); // Calls StepConverterUtils.InitExport() and resets caches
+
+            var acisHeader = new AcisHeader(version: 26.0, scale: 1.0);
+            var testAcisReader = new AcisReader(acisHeader);
+            AcisGlobalUtils.SetReader(testAcisReader);
+
+            var allAcisRecords = new List<AcisRecord>();
+            int entityIdx = 100; // Starting index for ACIS entities
+
+            // --- Part 1: Plate with a Hole ---
+            Logger.Info("TestExport_SimpleAssembly: Constructing Part 1 (Plate with Hole)...");
+            var plateOrigin = new Vector3(0, 0, 0);
+            var plateNormal = new Vector3(0, 0, 1);
+            var plateSurface = new AcisSurfacePlane(plateOrigin, plateNormal) { Index = entityIdx++ };
+            allAcisRecords.Add(new AcisRecord("plane-surface", testAcisReader) { Entity = plateSurface, Index = plateSurface.Index });
+
+            // Outer boundary points (e.g., 20x20 square)
+            var p_out1 = new AcisPoint(0, 0, 0) { Index = entityIdx++ }; var v_out1 = new AcisVertex(p_out1) { Index = entityIdx++ };
+            var p_out2 = new AcisPoint(20, 0, 0) { Index = entityIdx++ }; var v_out2 = new AcisVertex(p_out2) { Index = entityIdx++ };
+            var p_out3 = new AcisPoint(20, 20, 0) { Index = entityIdx++ }; var v_out3 = new AcisVertex(p_out3) { Index = entityIdx++ };
+            var p_out4 = new AcisPoint(0, 20, 0) { Index = entityIdx++ }; var v_out4 = new AcisVertex(p_out4) { Index = entityIdx++ };
+            acisPoints.AddRange(new[] {p_out1, p_out2, p_out3, p_out4});
+            acisVertices.AddRange(new[] {v_out1, v_out2, v_out3, v_out4});
+
+            var c_out12 = new AcisCurveStraight(p_out1.Position, p_out2.Position - p_out1.Position) { Index = entityIdx++ };
+            var c_out23 = new AcisCurveStraight(p_out2.Position, p_out3.Position - p_out2.Position) { Index = entityIdx++ };
+            var c_out34 = new AcisCurveStraight(p_out3.Position, p_out4.Position - p_out3.Position) { Index = entityIdx++ };
+            var c_out41 = new AcisCurveStraight(p_out4.Position, p_out1.Position - p_out4.Position) { Index = entityIdx++ };
+            acisCurves.AddRange(new AcisCurveStraight[]{c_out12,c_out23,c_out34,c_out41});
+
+            var e_out12 = new AcisEdge(v_out1, v_out2, c_out12) { Index = entityIdx++ }; var e_out23 = new AcisEdge(v_out2, v_out3, c_out23) { Index = entityIdx++ };
+            var e_out34 = new AcisEdge(v_out3, v_out4, c_out34) { Index = entityIdx++ }; var e_out41 = new AcisEdge(v_out4, v_out1, c_out41) { Index = entityIdx++ };
+            acisEdges.AddRange(new AcisEdge[]{e_out12, e_out23, e_out34, e_out41});
+
+            var co_out12 = new AcisCoEdge(e_out12, false) { Index = entityIdx++ }; var co_out23 = new AcisCoEdge(e_out23, false) { Index = entityIdx++ };
+            var co_out34 = new AcisCoEdge(e_out34, false) { Index = entityIdx++ }; var co_out41 = new AcisCoEdge(e_out41, false) { Index = entityIdx++ };
+            co_out12.NextCoedge = co_out23; co_out23.NextCoedge = co_out34; co_out34.NextCoedge = co_out41; co_out41.NextCoedge = co_out12;
+            var loopOuter = new AcisLoop(co_out12) { Index = entityIdx++ };
+            coedges.AddRange(new AcisCoEdge[]{co_out12, co_out23, co_out34, co_out41});
+            acisLoops.Add(loopOuter);
+
+            // Inner boundary points (hole, e.g., 5x5 square centered)
+            var p_in1 = new AcisPoint(5, 5, 0) { Index = entityIdx++ }; var v_in1 = new AcisVertex(p_in1) { Index = entityIdx++ };
+            var p_in2 = new AcisPoint(15, 5, 0) { Index = entityIdx++ }; var v_in2 = new AcisVertex(p_in2) { Index = entityIdx++ };
+            var p_in3 = new AcisPoint(15, 15, 0) { Index = entityIdx++ }; var v_in3 = new AcisVertex(p_in3) { Index = entityIdx++ };
+            var p_in4 = new AcisPoint(5, 15, 0) { Index = entityIdx++ }; var v_in4 = new AcisVertex(p_in4) { Index = entityIdx++ };
+            acisPoints.AddRange(new[] {p_in1, p_in2, p_in3, p_in4});
+            acisVertices.AddRange(new[] {v_in1, v_in2, v_in3, v_in4});
+
+            var c_in12 = new AcisCurveStraight(p_in1.Position, p_in2.Position - p_in1.Position) { Index = entityIdx++ };
+            var c_in23 = new AcisCurveStraight(p_in2.Position, p_in3.Position - p_in2.Position) { Index = entityIdx++ };
+            var c_in34 = new AcisCurveStraight(p_in3.Position, p_in4.Position - p_in3.Position) { Index = entityIdx++ };
+            var c_in41 = new AcisCurveStraight(p_in4.Position, p_in1.Position - p_in4.Position) { Index = entityIdx++ };
+            acisCurves.AddRange(new AcisCurveStraight[]{c_in12,c_in23,c_in34,c_in41});
+
+            var e_in12 = new AcisEdge(v_in1, v_in2, c_in12) { Index = entityIdx++ }; var e_in23 = new AcisEdge(v_in2, v_in3, c_in23) { Index = entityIdx++ };
+            var e_in34 = new AcisEdge(v_in3, v_in4, c_in34) { Index = entityIdx++ }; var e_in41 = new AcisEdge(v_in4, v_in1, c_in41) { Index = entityIdx++ };
+            acisEdges.AddRange(new AcisEdge[]{e_in12, e_in23, e_in34, e_in41});
+
+            // Inner loop coedges are typically reversed for a void
+            var co_in12 = new AcisCoEdge(e_in12, true) { Index = entityIdx++ }; var co_in23 = new AcisCoEdge(e_in23, true) { Index = entityIdx++ };
+            var co_in34 = new AcisCoEdge(e_in34, true) { Index = entityIdx++ }; var co_in41 = new AcisCoEdge(e_in41, true) { Index = entityIdx++ };
+            co_in12.NextCoedge = co_in41; co_in41.NextCoedge = co_in34; co_in34.NextCoedge = co_in23; co_in23.NextCoedge = co_in12; // Reversed order for inner loop
+            var loopInner = new AcisLoop(co_in12) { Index = entityIdx++ };
+            loopOuter.NextLoop = loopInner; // Link inner loop to outer
+            coedges.AddRange(new AcisCoEdge[]{co_in12, co_in23, co_in34, co_in41});
+            acisLoops.Add(loopInner);
+
+            var plateFace = new AcisFace(plateSurface, loopOuter, false) { Index = entityIdx++ }; // Sense false for normal alignment
+            var colorAttrPlate = new AttribStRgbColor(0.2, 0.3, 0.8) { Index = entityIdx++, Name = "PlateColorBlueish" };
+            plateFace.AttribList = new List<AcisAttribute> { colorAttrPlate };
+            allAcisRecords.Add(new AcisRecord("attrib_st_rgb_color-entity", testAcisReader) { Entity = colorAttrPlate, Index = colorAttrPlate.Index });
+            acisFaces.Add(plateFace);
+
+            var plateShell = new AcisShell(plateFace) { Index = entityIdx++ };
+            var plateLump = new AcisLump(plateShell) { Index = entityIdx++ };
+            var plateTransform = new AcisTransform(Matrix4x4.CreateTranslation(50, 0, 0)) { Index = entityIdx++ };
+            var plateBody = new AcisBody(plateLump) { Index = entityIdx++, TransformEntity = plateTransform };
+            acisShells.Add(plateShell); acisLumps.Add(plateLump); allAcisRecords.Add(new AcisRecord("transform-entity", testAcisReader){ Entity = plateTransform, Index = plateTransform.Index});
+            // Note: acisPoints, acisVertices etc. lists are from the old test, need to re-initialize or ensure they are cleared for this test.
+            // For this test, let's re-initialize them for clarity.
+            var part1Points = new List<AcisPoint> {p_out1, p_out2, p_out3, p_out4, p_in1, p_in2, p_in3, p_in4};
+            var part1Vertices = new List<AcisVertex> {v_out1, v_out2, v_out3, v_out4, v_in1, v_in2, v_in3, v_in4};
+            var part1Curves = new List<AcisCurve> {c_out12,c_out23,c_out34,c_out41, c_in12,c_in23,c_in34,c_in41};
+            var part1Edges = new List<AcisEdge> {e_out12, e_out23, e_out34, e_out41, e_in12, e_in23, e_in34, e_in41};
+            var part1Coedges = new List<AcisCoEdge> {co_out12, co_out23, co_out34, co_out41, co_in12, co_in23, co_in34, co_in41};
+            var part1Loops = new List<AcisLoop> {loopOuter, loopInner};
+
+            part1Points.ForEach(e => allAcisRecords.Add(new AcisRecord("point-entity", testAcisReader) { Entity = e, Index = e.Index }));
+            part1Vertices.ForEach(e => allAcisRecords.Add(new AcisRecord("vertex-entity", testAcisReader) { Entity = e, Index = e.Index }));
+            part1Curves.ForEach(e => allAcisRecords.Add(new AcisRecord("straight-curve", testAcisReader) { Entity = e, Index = e.Index }));
+            part1Edges.ForEach(e => allAcisRecords.Add(new AcisRecord("edge-entity", testAcisReader) { Entity = e, Index = e.Index }));
+            part1Coedges.ForEach(e => allAcisRecords.Add(new AcisRecord("coedge-entity", testAcisReader) { Entity = e, Index = e.Index }));
+            part1Loops.ForEach(e => allAcisRecords.Add(new AcisRecord("loop-entity", testAcisReader) { Entity = e, Index = e.Index }));
+            allAcisRecords.Add(new AcisRecord("face-entity", testAcisReader) { Entity = plateFace, Index = plateFace.Index });
+            allAcisRecords.Add(new AcisRecord("shell-entity", testAcisReader) { Entity = plateShell, Index = plateShell.Index });
+            allAcisRecords.Add(new AcisRecord("lump-entity", testAcisReader) { Entity = plateLump, Index = plateLump.Index });
+            allAcisRecords.Add(new AcisRecord("body-entity", testAcisReader) { Entity = plateBody, Index = plateBody.Index });
+
+
+            // --- Part 2: Shaft Profile (B-Spline Curve based) ---
+            Logger.Info("TestExport_SimpleAssembly: Constructing Part 2 (Shaft Profile)...");
+            var shaftCurve = new AcisCurveInt { Index = entityIdx++, CurveSubtypeString = "exact_int_cur" };
+            shaftCurve.SplineGeometricData = new BSCurveData {
+                Degree = 1, IsRational = false, IsPeriodic = false, NumPoles = 3,
+                Poles3D = new List<Vector3> { new Vector3(0,0,0), new Vector3(5,5,0), new Vector3(10,0,0) },
+                NumKnots = 4, Knots = new List<double> {0,0,1,1}, Multiplicities = new List<int> {2,2}
+            };
+            allAcisRecords.Add(new AcisRecord("intcurve-curve", testAcisReader) { Entity = shaftCurve, Index = shaftCurve.Index });
+
+            var p_s1 = new AcisPoint(shaftCurve.SplineGeometricData.Poles3D.First()) { Index = entityIdx++ }; var v_s1 = new AcisVertex(p_s1) { Index = entityIdx++ };
+            var p_s2 = new AcisPoint(shaftCurve.SplineGeometricData.Poles3D.Last()) { Index = entityIdx++ }; var v_s2 = new AcisVertex(p_s2) { Index = entityIdx++ };
+            allAcisRecords.Add(new AcisRecord("point-entity", testAcisReader) { Entity = p_s1, Index = p_s1.Index });
+            allAcisRecords.Add(new AcisRecord("point-entity", testAcisReader) { Entity = p_s2, Index = p_s2.Index });
+            allAcisRecords.Add(new AcisRecord("vertex-entity", testAcisReader) { Entity = v_s1, Index = v_s1.Index });
+            allAcisRecords.Add(new AcisRecord("vertex-entity", testAcisReader) { Entity = v_s2, Index = v_s2.Index });
+
+            var e_shaft = new AcisEdge(v_s1, v_s2, shaftCurve) { Index = entityIdx++ };
+            allAcisRecords.Add(new AcisRecord("edge-entity", testAcisReader) { Entity = e_shaft, Index = e_shaft.Index });
+
+            var co_shaft = new AcisCoEdge(e_shaft, false) { Index = entityIdx++ }; // Single coedge for an open profile
+            allAcisRecords.Add(new AcisRecord("coedge-entity", testAcisReader) { Entity = co_shaft, Index = co_shaft.Index });
+
+            var loopShaft = new AcisLoop(co_shaft) { Index = entityIdx++ }; // Open loop
+            allAcisRecords.Add(new AcisRecord("loop-entity", testAcisReader) { Entity = loopShaft, Index = loopShaft.Index });
+
+            // Dummy plane and face for this wireframe geometry
+            var shaftDummyPlane = new AcisSurfacePlane(Vector3.Zero, Vector3.UnitZ) { Index = entityIdx++ };
+            allAcisRecords.Add(new AcisRecord("plane-surface", testAcisReader) { Entity = shaftDummyPlane, Index = shaftDummyPlane.Index });
+            var shaftFace = new AcisFace(shaftDummyPlane, loopShaft, false) { Index = entityIdx++ };
+            allAcisRecords.Add(new AcisRecord("face-entity", testAcisReader) { Entity = shaftFace, Index = shaftFace.Index });
+
+            var shaftShell = new AcisShell(shaftFace) { Index = entityIdx++ }; // Open shell
+            var shaftLump = new AcisLump(shaftShell) { Index = entityIdx++ };
+            var shaftTransformMatrix = Matrix4x4.CreateRotationZ((float)(Math.PI / 2.0)) * Matrix4x4.CreateTranslation(0, 50, 0) ; // Rotate 90deg around Z, then translate
+            var shaftTransform = new AcisTransform(shaftTransformMatrix) { Index = entityIdx++ };
+            var shaftBody = new AcisBody(shaftLump) { Index = entityIdx++, TransformEntity = shaftTransform };
+            allAcisRecords.Add(new AcisRecord("shell-entity", testAcisReader) { Entity = shaftShell, Index = shaftShell.Index });
+            allAcisRecords.Add(new AcisRecord("lump-entity", testAcisReader) { Entity = shaftLump, Index = shaftLump.Index });
+            allAcisRecords.Add(new AcisRecord("transform-entity", testAcisReader) { Entity = shaftTransform, Index = shaftTransform.Index });
+            allAcisRecords.Add(new AcisRecord("body-entity", testAcisReader) { Entity = shaftBody, Index = shaftBody.Index });
+
+
+            // 3. Populate Mock Inventor Model
+            testAcisReader.RecordsList.AddRange(allAcisRecords);
+            var inventorModel = new Inventor();
+            var brepSegment = new RSeSegment(inventorModel) { Name = "BRepTestSegment" };
+            brepSegment.ParsedContent["ACIS"] = testAcisReader;
+            inventorModel.Segments["BRepTestSegment"] = brepSegment;
+
+            // Simulate iProperties
+            inventorModel.iProperties = new Dictionary<string, Dictionary<object, Tuple<string, object>>>();
+            var sumInfo = new Dictionary<object, Tuple<string, object>> { [4] = new Tuple<string, object>("Author", "Assembly Test Author") };
+            inventorModel.iProperties["Inventor Summary Information"] = sumInfo;
+            var desProps = new Dictionary<object, Tuple<string, object>> { [5] = new Tuple<string, object>("Part Number", "AsmPN001") };
+            inventorModel.iProperties["Design Tracking Properties"] = desProps;
+
+
+            Logger.Info("TestExport_SimpleAssembly: ACIS model construction complete.");
+
+            // 4. Call Export
+            Logger.Info("TestExport_SimpleAssembly: Calling StepConverterUtils.Export...");
+            string stepOutput = StepConverterUtils.Export(inventorModel, "TestAssembly.stp", Logger.LogWriter);
+            Logger.Info("TestExport_SimpleAssembly: StepConverterUtils.Export finished.");
+            // File.WriteAllText("TestAssembly_Output.stp", stepOutput); // For manual inspection
+
+            // 5. Validate STEP Output String
+            Assert.IsTrue(stepOutput.StartsWith("ISO-10303-21;"), "STEP Starts correctly");
+            Assert.IsTrue(stepOutput.Contains("HEADER;"), "Contains HEADER section");
+            Assert.IsTrue(stepOutput.Contains("DATA;"), "Contains DATA section");
+            Assert.IsTrue(stepOutput.Contains("ENDSEC;"), "Contains ENDSEC");
+            Assert.IsTrue(stepOutput.Contains("END-ISO-10303-21;"), "STEP Ends correctly");
+
+            // Product Structure
+            Assert.AreEqual(3, CountOccurrences(stepOutput, "PRODUCT("), "PRODUCT count (Asm, Part1, Part2)");
+            Assert.AreEqual(3, CountOccurrences(stepOutput, "PRODUCT_DEFINITION("), "PRODUCT_DEFINITION count");
+            Assert.AreEqual(2, CountOccurrences(stepOutput, "NEXT_ASSEMBLY_USAGE_OCCURRENCE("), "NAUO count");
+
+            // Part 1 (Plate)
+            // Heuristic for MSB might make it SBSM if not perfectly closed or if CreateShellFromAcisFaces is conservative.
+            // Check for either, but prefer MSB if logic is robust.
+            bool isPart1Msb = CountOccurrences(stepOutput, "MANIFOLD_SOLID_BREP(") >= 1; // Assuming plate is the first MSB or among them
+            bool isPart1Sbsm = CountOccurrences(stepOutput, "SHELL_BASED_SURFACE_MODEL(") >=1;
+            Assert.IsTrue(isPart1Msb || isPart1Sbsm, "Part 1 (Plate) should be MSB or SBSM");
+
+            // This check depends on how ADVANCED_FACE is named. If it's named based on the MSB/SBSM, this is hard.
+            // Instead, check for the structure within the specific MSB/SBSM for Part1.
+            // For now, count FACE_OUTER_BOUND and (total) FACE_BOUND.
+            Assert.IsTrue(CountOccurrences(stepOutput, "FACE_OUTER_BOUND(") >= 1, "Part 1 should have at least 1 FACE_OUTER_BOUND");
+            Assert.IsTrue(CountOccurrences(stepOutput, "FACE_BOUND(") >= 2, "Part 1 should have at least 2 FACE_BOUND (outer + inner for hole)");
+            Assert.IsTrue(CountOccurrences(stepOutput, $",STYLED_ITEM(") >= 1, "StyledItem for Plate's face expected"); // Check for any styled item for now
+            Assert.IsTrue(CountOccurrences(stepOutput, $",COLOUR_RGB('PlateColorBlueish'") >= 1, "PlateColorBlueish expected");
+
+
+            // Part 2 (Shaft Profile - B-Spline Curve)
+            // This will be an SBSM containing an open shell with the B-Spline curve.
+            Assert.IsTrue(CountOccurrences(stepOutput, "B_SPLINE_CURVE_WITH_KNOTS(") >= 1, "B_SPLINE_CURVE_WITH_KNOTS for Part 2 profile");
+            // Check B-Spline parameters (degree 1, 3 CPs, 4 knots, 2 mults)
+            Assert.IsTrue(stepOutput.Contains("B_SPLINE_CURVE_WITH_KNOTS('',1,("), "B-Spline degree 1 check");
+            Assert.IsTrue(stepOutput.Contains(",(2,2),(.UNSPECIFIED.,.F.,.F.,(2,2),(0.0000000000,0.0000000000,1.0000000000,1.0000000000),.UNSPECIFIED.)"), "B-Spline knots/mults pattern check");
+
+
+            // Assembly & Instancing
+            Assert.AreEqual(2, CountOccurrences(stepOutput, "MAPPED_ITEM("), "MAPPED_ITEM count");
+            Assert.AreEqual(2, CountOccurrences(stepOutput, "REPRESENTATION_MAP("), "REPRESENTATION_MAP count");
+            Assert.AreEqual(2, CountOccurrences(stepOutput, "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION("), "CDSR count");
+            // AXIS2_PLACEMENT_3D: 2 for transforms, plus placements for canonical geometry (planes, lines, bspline axis if any)
+            // This count will be higher. Let's check for specific transformed points.
+
+            // Spot check transformed coordinates
+            // Part 1 (Plate) was at origin, translated by (50,0,0). Original p_out2 was (20,0,0)
+            string expectedPlatePt1Transformed = StepConverterUtils.FormatDouble(20 + 50); // 70.0
+            Assert.IsTrue(stepOutput.Contains($"CARTESIAN_POINT('',({expectedPlatePt1Transformed},{StepConverterUtils.FormatDouble(0)},{StepConverterUtils.FormatDouble(0)}))"), "Transformed Plate Point check");
+
+            // Part 2 (Shaft) CPs: (0,0,0), (5,5,0), (10,0,0)
+            // Transform: RotateZ(90deg) -> (0,0,0), (-5,5,0), (0,10,0)
+            // Then Translate(0,50,0) -> (0,50,0), (-5,55,0), (0,60,0)
+            string cpShaft1_X = StepConverterUtils.FormatDouble(0); string cpShaft1_Y = StepConverterUtils.FormatDouble(50);
+            string cpShaft2_X = StepConverterUtils.FormatDouble(-5); string cpShaft2_Y = StepConverterUtils.FormatDouble(55);
+            string cpShaft3_X = StepConverterUtils.FormatDouble(0); string cpShaft3_Y = StepConverterUtils.FormatDouble(60);
+
+            Assert.IsTrue(stepOutput.Contains($"CARTESIAN_POINT('',({cpShaft1_X},{cpShaft1_Y},{StepConverterUtils.FormatDouble(0)}))"), "Transformed Shaft CP1 check");
+            Assert.IsTrue(stepOutput.Contains($"CARTESIAN_POINT('',({cpShaft2_X},{cpShaft2_Y},{StepConverterUtils.FormatDouble(0)}))"), "Transformed Shaft CP2 check");
+            Assert.IsTrue(stepOutput.Contains($"CARTESIAN_POINT('',({cpShaft3_X},{cpShaft3_Y},{StepConverterUtils.FormatDouble(0)}))"), "Transformed Shaft CP3 check");
+
+            Logger.Info("Test: TestExport_SimpleAssembly_GeneratesValidStepFileStructure PASSED");
+        }
+
     }
+}
 }

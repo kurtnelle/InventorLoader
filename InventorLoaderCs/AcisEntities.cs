@@ -608,6 +608,23 @@ namespace InventorLoaderCs
         public Law LawCurveData { get; set; }
         public Helix HelixCurveData { get; set; }
 
+        // Properties for "offset" subtype (off_int_cur / offset_int_cur)
+        public Curve BaseCurveForOffset { get; set; }
+        public double StartParamOffset { get; set; }
+        public double EndParamOffset { get; set; }
+        public Vector3 OffsetVector { get; set; }
+        public string OTxt1 { get; set; } // Placeholder for 'oTxt1'
+        public int OI { get; set; }       // Placeholder for 'oI'
+        public string OTxt2 { get; set; } // Placeholder for 'oTxt2'
+        public int OJ { get; set; }       // Placeholder for 'oJ'
+
+        // Properties for "projected" subtype (proj_int_cur)
+        public Curve CurveToProject { get; set; }
+        public Surface ProjectionTargetSurface { get; set; }
+        public Interval ProjectionRange { get; set; } // Assuming Interval is suitable
+        public bool ProjectionDirectionFlag { get; set; } // For the optional boolean
+        public Vector3 ProjectionDirection { get; set; } // For the optional vector if boolean is true
+
         public CurveInt() : base("intcurve-curve") { }
 
         public override int Set(AcisRecord record)
@@ -639,15 +656,22 @@ namespace InventorLoaderCs
                     case "helix_int_cur":
                         ParseHelixIntCurve(record, ref CurrentChunkIndex, header);
                         break;
+                    case "off_int_cur":
+                    case "offset_int_cur":
+                        ParseOffsetIntCurve(record, ref CurrentChunkIndex, header);
+                        break;
+                    case "proj_int_cur":
+                        ParseProjectedIntCurve(record, ref CurrentChunkIndex, header);
+                        break;
                     case "comp_int_cur":
                     case "defm_int_cur":
                     case "spring_int_cur":
-                    case "off_int_cur":
-                    case "offset_int_cur":
+                    // case "off_int_cur": // Handled above
+                    // case "offset_int_cur": // Handled above
                     case "off_surf_int_cur":
                     case "para_silh_int_cur":
                     case "par_int_cur":
-                    case "proj_int_cur":
+                    // case "proj_int_cur": // Handled above
                     case "surf_int_cur":
                     case "int_int_cur":
                     case "taper_silh_int_cur":
@@ -856,6 +880,65 @@ namespace InventorLoaderCs
                 Logger.Warning($"{TypeName}.ParseHelixIntCurve: Expected dimension type for PCurve2, but found nothing. Record: {Record.Name} #{Record.Index}");
             }
         }
+
+        private void ParseOffsetIntCurve(AcisRecord record, ref int chunkIndex, AcisHeader header)
+        {
+            Logger.Info($"{TypeName}.ParseOffsetIntCurve: Parsing '{CurveSubtypeString}' subtype for record {Record.Name} #{Record.Index}");
+
+            // Python's setOffset calls setSurfaceCurve first, which reads the B-Spline.
+            // So, we parse the B-Spline data of the offset curve itself first.
+            ParseExactIntCurve(record, ref chunkIndex, header);
+
+            BaseCurveForOffset = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "BaseCurveForOffset", "curve-entity") as Curve;
+            StartParamOffset = AcisParsingUtils.GetFloat(record, ref chunkIndex, "StartParamOffset");
+            EndParamOffset = AcisParsingUtils.GetFloat(record, ref chunkIndex, "EndParamOffset");
+            OffsetVector = AcisParsingUtils.GetVector(record, ref chunkIndex, "OffsetVector");
+
+            // Additional fields from Python's importerConstants for offset curve
+            OTxt1 = AcisParsingUtils.GetText(record, ref chunkIndex, "OTxt1"); // e.g., "parameter_space"
+            OI = AcisParsingUtils.GetInteger(record, ref chunkIndex, "OI");     // e.g., 0
+            OTxt2 = AcisParsingUtils.GetText(record, ref chunkIndex, "OTxt2"); // e.g., "parameter_space"
+            OJ = AcisParsingUtils.GetInteger(record, ref chunkIndex, "OJ");     // e.g., 0
+
+            // Python code also reads 'oTol' (tolerance)
+            double oTol = AcisParsingUtils.GetFloat(record, ref chunkIndex, "OffsetTolerance");
+            // This tolerance might be stored or used as needed.
+        }
+
+        private void ParseProjectedIntCurve(AcisRecord record, ref int chunkIndex, AcisHeader header)
+        {
+            Logger.Info($"{TypeName}.ParseProjectedIntCurve: Parsing 'proj_int_cur' subtype for record {Record.Name} #{Record.Index}");
+
+            // Python's setProject seems to call setSurfaceCurve first.
+            ParseExactIntCurve(record, ref chunkIndex, header);
+
+            CurveToProject = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "CurveToProject", "curve-entity") as Curve;
+            ProjectionTargetSurface = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "ProjectionTargetSurface", "surface-entity") as Surface;
+
+            // Handle optional boolean and interval as per Python's setProject
+            // Python: projDir = getBool(chunks, i)
+            //         if projDir: self.projVec = getVec(chunks, i)
+            //         self.projRange = getInterval(chunks, i, header, MIN_INF, MAX_INF)
+
+            // Check if the next chunk is a boolean ident ('T' or 'F') or part of an interval
+            // This is a bit tricky without knowing the exact chunk structure.
+            // Assuming boolean comes first if present.
+            if (record.Chunks.Count > chunkIndex)
+            {
+                var nextChunkVal = record.Chunks[chunkIndex].Val;
+                if (nextChunkVal is string strVal && (strVal.Equals("T", StringComparison.OrdinalIgnoreCase) || strVal.Equals("F", StringComparison.OrdinalIgnoreCase)))
+                {
+                    ProjectionDirectionFlag = AcisParsingUtils.GetBool(record, ref chunkIndex, "ProjectionDirectionFlag");
+                    if (ProjectionDirectionFlag)
+                    {
+                        ProjectionDirection = AcisParsingUtils.GetVector(record, ref chunkIndex, "ProjectionDirection");
+                    }
+                }
+            }
+            // Whether boolean was present or not, an interval should follow.
+            ProjectionRange = AcisParsingUtils.GetInterval(record, ref chunkIndex, header, double.NegativeInfinity, double.PositiveInfinity, "ProjectionRange");
+        }
+
     }
 
     // BSSurfaceData is now in ImporterClasses.cs
@@ -871,6 +954,15 @@ namespace InventorLoaderCs
         public Vector3 CenterPoint { get; set; }
         public Vector3 DirectionVector { get; set; }
 
+        // Properties for "offset" subtype (off_spl_sur)
+        public Surface BaseSurfaceForOffset { get; set; }
+        public double OffsetDistance { get; set; }
+        public SenseEnum USenseOffset { get; set; } // Or specific enum if ACIS has one for this
+        public SenseEnum VSenseOffset { get; set; } // Or specific enum
+
+        // Properties for "ruled" subtype (rule_sur)
+        public Curve ProfileCurve1 { get; set; }
+        public Curve ProfileCurve2 { get; set; }
 
         public SurfaceSpline() : base("spline-surface") { }
 
@@ -902,6 +994,12 @@ namespace InventorLoaderCs
                         break;
                     case "rot_spl_sur":
                         ParseRotSplineSurface(record, ref CurrentChunkIndex, header);
+                        break;
+                    case "off_spl_sur":
+                        ParseOffsetSplineSurface(record, ref CurrentChunkIndex, header);
+                        break;
+                    case "rule_sur":
+                        ParseRuledSplineSurface(record, ref CurrentChunkIndex, header);
                         break;
                     default:
                         Logger.Warning($"{TypeName}.Set: Unsupported subtype '{SurfaceSubtype}' for record {Record.Name} #{Record.Index}.");
@@ -981,6 +1079,36 @@ namespace InventorLoaderCs
             ProfileCurve = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "ProfileCurve", "curve-entity") as Curve;
             CenterPoint = AcisParsingUtils.GetLocation(record, ref chunkIndex, header, "LocationPoint");
             DirectionVector = AcisParsingUtils.GetVector(record, ref chunkIndex, "DirectionVector");
+            ParseSplineSurfaceProper(record, ref chunkIndex, header);
+        }
+
+        private void ParseOffsetSplineSurface(AcisRecord record, ref int chunkIndex, AcisHeader header)
+        {
+            Logger.Info($"{TypeName}.ParseOffsetSplineSurface: Parsing 'off_spl_sur' subtype for record {Record.Name} #{Record.Index}");
+
+            BaseSurfaceForOffset = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "BaseSurfaceForOffset", "surface-entity") as Surface;
+            OffsetDistance = AcisParsingUtils.GetFloat(record, ref chunkIndex, "OffsetDistance");
+
+            // Assuming USenseOffset and VSenseOffset are stored as standard sense enums or similar tags
+            // Python code uses getSense(chunks, i) which maps "forward" to 0, "reversed" to 1
+            // Let's assume GetEnumByTag or a similar utility can parse these if they are standard string tags
+            // Or, if they are simple integer flags, GetInteger would be used.
+            // For now, using GetEnumByTag as a placeholder for how sense might be stored.
+            USenseOffset = AcisParsingUtils.GetEnumByTag<SenseEnum>(record, ref chunkIndex, "USenseOffset");
+            VSenseOffset = AcisParsingUtils.GetEnumByTag<SenseEnum>(record, ref chunkIndex, "VSenseOffset");
+
+            // After parsing offset-specific data, parse the B-Spline data of the offset surface itself
+            ParseSplineSurfaceProper(record, ref chunkIndex, header);
+        }
+
+        private void ParseRuledSplineSurface(AcisRecord record, ref int chunkIndex, AcisHeader header)
+        {
+            Logger.Info($"{TypeName}.ParseRuledSplineSurface: Parsing 'rule_sur' subtype for record {Record.Name} #{Record.Index}");
+
+            ProfileCurve1 = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "ProfileCurve1", "curve-entity") as Curve;
+            ProfileCurve2 = AcisParsingUtils.GetRefNode(record, ref chunkIndex, "ProfileCurve2", "curve-entity") as Curve;
+
+            // After parsing the two profile curves, parse the B-Spline data of the ruled surface itself
             ParseSplineSurfaceProper(record, ref chunkIndex, header);
         }
     }

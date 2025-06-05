@@ -281,7 +281,9 @@ namespace InventorLoaderCs
             _dataReaderMethods["F8A77A4E-11D1-11D2-910F-0000F8061098"] = Read_MaterialDef;
             _dataReaderMethods["DAF73D46-B525-11D1-8D78-0008C75E7068"] = Read_DocumentSettings;
             _dataReaderMethods["FB8BDD34-AA94-11D1-8D78-0008C75E7068"] = Read_ChangeManager;
-            _dataReaderMethods["6759D86F-C308-11D1-8D6C-0008C75E7068"] = Read_RenderingStyleProperties;
+            _dataReaderMethods["6759D86F-C308-11D1-8D6C-0008C75E7068"] = Read_RenderingStyleProperties; // Already present, will be enhanced
+            _dataReaderMethods["11FBECCD-B29E-4057-A277-75611C356307"] = Read_DefaultStyles; // Renamed from StyleDefinitions for clarity and function
+            _dataReaderMethods["1C4CFF13-11D0-D1F8-0008CABC0663DC09"] = Read_TextStyleCollection; // UID from Python for TextStyleCollection
         }
 
         public override void ReadSegmentData(byte[] segmentData, StreamWriter logFile)
@@ -293,7 +295,22 @@ namespace InventorLoaderCs
         public void PostRead(StreamWriter logFile) { /* ... */ }
         private void Read_ApplicationProperties(SecNode node) { node.ReadHeader0(Logger.LogWriter); node.ReadLen32Text16("AppName", Logger.LogWriter); node.ReadUInt32("AppVersion", Logger.LogWriter); }
         private void Read_DefaultStyle(SecNode node) { node.ReadHeader0(Logger.LogWriter); _defaultColor = node.ReadColorRgba("DefaultColor", Logger.LogWriter); }
-        private void Read_StyleDefinitions(SecNode node) { node.ReadHeader0(Logger.LogWriter); node.ReadChildRefList("StylesList", Logger.LogWriter); }
+        // Renamed Read_StyleDefinitions to Read_DefaultStyles to better match its Python counterpart UID and function
+        private void Read_DefaultStyles(SecNode node)
+        {
+            Logger.Info($"AppReader: Reading DefaultStyles (UID: {node.Uid})");
+            node.ReadHeader0(Logger.LogWriter);
+            // Python's Read_11FBECCD reads multiple ChildRefs:
+            // DefaultMaterial, DefaultRenderingStyle, LayerCollection, DefaultDimensionStyle, etc.
+            // For now, reading as a generic list. Specific ChildRefs can be parsed if their meaning is clear.
+            node.ReadChildRef("DefaultMaterialRef", Logger.LogWriter);
+            node.ReadChildRef("DefaultRenderingStyleRef", Logger.LogWriter);
+            node.ReadChildRef("LayerCollectionRef", Logger.LogWriter);
+            node.ReadChildRef("DefaultDimensionStyleRef", Logger.LogWriter);
+            node.ReadChildRef("DefaultStandardRef", Logger.LogWriter);
+            // ... potentially more ChildRefs based on file version or specific document type
+            node.ParsedContent["Summary"] = "Parsed DefaultStyles (structure is approximate, read several ChildRefs)";
+        }
         private void Read_ReferencedFiles(SecNode node) { node.ReadHeader0(Logger.LogWriter); node.ReadChildRefList("FilesList", Logger.LogWriter); }
         private void Read_UnitsOfMeasure(SecNode node) { node.ReadHeader0(Logger.LogWriter); node.ReadUInt32("UnitsFlags", Logger.LogWriter); node.ReadFloat64("LinearConversionFactor", Logger.LogWriter); }
 
@@ -352,9 +369,53 @@ namespace InventorLoaderCs
             node.ReadFloat32("TextureAngle", Logger.LogWriter);
             node.ReadColorRgba("TextureBlendColor", Logger.LogWriter);
             node.ReadUInt32("TextureFlags", Logger.LogWriter);
-            if (Segment.Version.IsGreaterOrEqualTo(10, 0, 0)) { node.ReadFloat32("ReflectionFactor", Logger.LogWriter); node.ReadUInt32("RenderType", Logger.LogWriter); node.SkipBytes(4*8, Logger.LogWriter, "R10 floats/vectors"); }
-            if (Segment.Version.IsGreaterOrEqualTo(2009,0,0)) { node.ReadUInt32("IlluminationModel", Logger.LogWriter); node.SkipBytes(4, Logger.LogWriter, "R2009 u32_0"); }
+            if (Segment.Version.IsGreaterOrEqualTo(10, 0, 0))
+            {
+                node.ReadFloat32("ReflectionFactor", Logger.LogWriter);
+                node.ReadUInt32("RenderType", Logger.LogWriter);
+                // Python reads: Vec2d "TextureTilingFactor", Vec2d "TextureShear", Vec2d "TextureNormalProjectionVector"
+                // Each Vec2d is 2 floats. So 2*4 + 2*4 + 2*4 = 24 bytes.
+                // The existing C# SkipBytes(4*8) = 32 bytes. This might be for 4 Vec2d or other data.
+                // Let's assume the 32 bytes is correct for now, possibly covering more than just these 3 Vec2d.
+                node.SkipBytes(4*8, Logger.LogWriter, "R10 floats/vectors (TextureTiling, Shear, NormalProjection, etc.)");
+            }
+            if (Segment.Version.IsGreaterOrEqualTo(2009,0,0))
+            {
+                node.ReadUInt32("IlluminationModel", Logger.LogWriter);
+                node.SkipBytes(4, Logger.LogWriter, "R2009 u32_0");
+            }
+            // Python's Read_6759D86F also reads BumpMapFile and related parameters
+            // These might be version dependent or always present after a certain point.
+            // Adding them here, assuming they follow the previously parsed fields.
+            // This part needs verification against actual file structures or more detailed Python logic.
+            if (Segment.Version.IsGreaterOrEqualTo(6,0,0)) // Assuming bump maps were introduced around R6 or similar
+            {
+                 node.ReadLen32Text16("FileMapBump", Logger.LogWriter);
+                 node.ReadBoolean("BumpMapEnabled", Logger.LogWriter);
+                 node.ReadFloat32("BumpMapScaleU", Logger.LogWriter);
+                 node.ReadFloat32("BumpMapScaleV", Logger.LogWriter);
+                 node.ReadFloat32("BumpMapOffsetU", Logger.LogWriter);
+                 node.ReadFloat32("BumpMapOffsetV", Logger.LogWriter);
+                 node.ReadFloat32("BumpMapAngle", Logger.LogWriter);
+                 // There might be more bump-related flags or properties.
+            }
+
             node.ParsedContent["Summary"] = $"Parsed RenderingStyleProperties: Name='{node.ParsedContent.GetValueOrDefault("StyleName", "N/A")}'";
+        }
+
+        private void Read_TextStyleCollection(SecNode node)
+        {
+            Logger.Info($"AppReader: Reading TextStyleCollection (UID: {node.Uid})");
+            // Python's Read_1C4CFF13 reads a header (like ReadHeaderSU32S)
+            // then a List2 of NodeRefs to TextStyles.
+            ReadHeaderSU32S(node, "TextStyleCollection", Logger.LogWriter); // Common style header
+            // After the header, specific fields for TextStyleCollection might exist before the list.
+            // Python example shows: ReadUInt32 "u32_0", ReadUInt32 "u32_1"
+            node.ReadUInt32("UnknownFlags1", Logger.LogWriter);
+            node.ReadUInt32("UnknownFlags2", Logger.LogWriter);
+
+            node.ReadChildRefList("TextStyles", Logger.LogWriter); // Reads List2 of NodeRefs
+            node.ParsedContent["Summary"] = "Parsed TextStyleCollection";
         }
     }
 
@@ -423,6 +484,18 @@ namespace InventorLoaderCs
             _dataReaderMethods["90874D11-11D0-D1F8-0008CABC0663DC09"] = Read_PlanarSketch;
             _dataReaderMethods["338634AC-11D0-D1F8-0008CABC0663DC09"] = Read_RDxAssemblyComponentInstance;
             _dataReaderMethods["F3A02CB6-11D2-11D2-910F-0000F8061098"] = Read_RDxAssemblyOccurrence;
+
+            // Placeholders for new methods related to Feature properties
+            _dataReaderMethods["DC_PARAM_PROXY_UID"] = Read_RDxParameterProxy; // Generic proxy UID
+            _dataReaderMethods["0B85010C-11D0-D1F8-0008CABC0663DC09"] = Read_RDxParameterProxy; // ExtrudeFeatureParameterProxy
+            _dataReaderMethods["258EC6E1-11D0-D1F8-0008CABC0663DC09"] = Read_RDxParameterProxy; // RevolveFeatureParameterProxy
+            _dataReaderMethods["5CC350B8-11D0-D1F8-0008CABC0663DC09"] = Read_RDxParameterProxy; // GenericFeatureParameterProxy (example)
+
+            _dataReaderMethods["DC_BOOL_PARAM_UID"] = Read_RDxBooleanParameter; // Generic boolean param UID
+            _dataReaderMethods["90874D28-11D0-D1F8-0008CABC0663DC09"] = Read_RDxBooleanParameter; // BooleanParameter
+
+            _dataReaderMethods["DC_EXTENT_UID"] = Read_RDxExtentPlaceholder; // Generic extent UID
+            _dataReaderMethods["0CA07988-11D0-D1F8-0008CABC0663DC09"] = Read_RDxExtentPlaceholder; // ExtrusionFeatureExtent (example)
         }
 
         private void ReadHeaderS32ss(SecNode node, string typeName, StreamWriter logFile)
@@ -506,6 +579,55 @@ namespace InventorLoaderCs
             if (Segment.Version.IsLowerThan(2017,0,0)) { node.SkipBytes(1, Logger.LogWriter); }
             if (Segment.Version.IsGreaterOrEqualTo(2013,0,0))
             { if (Segment.Version.IsLowerThan(2017,0,0)) { /* Skip complex maps */ } else { node.ReadChildRef("ref_4_Unknown", Logger.LogWriter); } }
+        }
+
+        // New methods for DCReader
+        private void Read_RDxParameterProxy(SecNode node)
+        {
+            Logger.Info($"DCReader: Reading RDxParameterProxy (UID: {node.Uid})");
+            // This is a generic handler. Specific proxies might have a few leading bytes/flags
+            // before the ChildRef, but the ChildRef is the most crucial part.
+            // Example Python proxies often read:
+            // - u32 flags
+            // - u8 unknown/type
+            // - ChildRef "ReferencedParameter"
+            // For a generic placeholder, we'll focus on the ChildRef.
+            // If specific proxies have a consistent small header, that could be skipped or read here.
+            // node.SkipBytes(5, Logger.LogWriter, "Skipping potential proxy header (flags + byte)"); // Example skip
+            node.ReadChildRef("ReferencedParameter", Logger.LogWriter);
+            node.ParsedContent["Summary"] = $"Parsed RDxParameterProxy, refers to: {node.ParsedContent.GetValueOrDefault("ReferencedParameter", "N/A")}";
+        }
+
+        private void Read_RDxBooleanParameter(SecNode node)
+        {
+            Logger.Info($"DCReader: Reading RDxBooleanParameter (UID: {node.Uid})");
+            // Python's Read_90874D28 for BooleanParameter reads:
+            // - Header (assuming ReadHeaderParameter or similar if standardized)
+            // - Value (Boolean)
+            // For this method, we assume any common parameter header is handled elsewhere or by a more generic Read_Parameter.
+            // This focuses on reading the boolean value itself.
+            bool? value = node.ReadBoolean("Value", Logger.LogWriter); // SecNode.ReadBoolean handles reading various forms of boolean
+            node.ParsedContent["Value"] = value;
+            node.ParsedContent["Summary"] = $"Parsed RDxBooleanParameter: Value='{value}'";
+            // It might also have a name or other common parameter fields if not handled by a generic wrapper.
+        }
+
+        private void Read_RDxExtentPlaceholder(SecNode node)
+        {
+            Logger.Info($"DCReader: Reading RDxExtentPlaceholder (UID: {node.Uid})");
+            // Based on Python's Read_0CA07988 (ExtrusionFeatureExtent) which reads:
+            // - Header
+            // - ExtentType (Enum as CrossRef)
+            // - Distance1 (CrossRef to Parameter)
+            // - Distance2 (CrossRef to Parameter)
+            // - ToGeometry (CrossRef to Face/Plane)
+            // This placeholder will read these CrossRefs.
+            // A common header for extents, if any, would be handled by a wrapper.
+            node.ReadCrossRef("ExtentTypeEnum", Logger.LogWriter);    // Enum defining the type of extent (e.g., Distance, ToNext, FromTo)
+            node.ReadCrossRef("DistanceParameter1", Logger.LogWriter); // Ref to a Parameter node for the primary distance
+            node.ReadCrossRef("DistanceParameter2", Logger.LogWriter); // Ref to a Parameter node for a secondary distance (e.g., in FromTo)
+            node.ReadCrossRef("ToFaceReference", Logger.LogWriter);    // Ref to a geometry (e.g., face, workplane) for "To" extents
+            node.ParsedContent["Summary"] = "Parsed RDxExtentPlaceholder (structure based on ExtrusionFeatureExtent)";
         }
     }
 

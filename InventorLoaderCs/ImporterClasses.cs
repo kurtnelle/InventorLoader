@@ -321,7 +321,8 @@ namespace InventorLoaderCs
         public RSeDatabase RSeDb { get; set; }
         public UFRxDocument UFRxDoc { get; set; } // Changed from object to UFRxDocument
         public RSeRevisions RSeRevisions { get; set; }
-        public Dictionary<string, object> IProperties { get; set; }
+        // Updated IProperties type to match the requirement
+        public Dictionary<string, Dictionary<object, Tuple<string, object>>> iProperties { get; set; }
         public Dictionary<string, RSeSegment> Segments { get; private set; }
 
         public Inventor()
@@ -329,7 +330,8 @@ namespace InventorLoaderCs
             RSeDb = new RSeDatabase();
             UFRxDoc = new UFRxDocument(); // Initialize UFRxDoc
             RSeRevisions = new RSeRevisions();
-            IProperties = new Dictionary<string, object>();
+            // Initialize with the new type
+            iProperties = new Dictionary<string, Dictionary<object, Tuple<string, object>>>();
             Segments = new Dictionary<string, RSeSegment>();
         }
 
