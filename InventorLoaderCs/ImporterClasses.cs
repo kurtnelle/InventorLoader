@@ -27,17 +27,31 @@ namespace InventorLoaderCs
         public override string ToString() => $"R:{R}, G:{G}, B:{B}, A:{A}";
     }
 
+    // Moved from SegmentReaders.cs for SecNode dependency
+    public struct ColorPlaceholder
+    {
+        public float R, G, B, A;
+        public ColorPlaceholder(float r, float g, float b, float a) { R = r; G = g; B = b; A = a; }
+        public override string ToString() => $"R:{R} G:{G} B:{B} A:{A}";
+    }
+
     public class VersionInfo
     {
-        public int Revision { get; set; }
-        public int Minor { get; set; }
         public int Major { get; set; }
+        public int Minor { get; set; }
+        public int Revision { get; set; }
         public Tuple<int, int, int, int, int> Data { get; set; }
 
-        public VersionInfo()
+        public VersionInfo(int major = 0, int minor = 0, int revision = 0)
         {
+            Major = major;
+            Minor = minor;
+            Revision = revision;
             Data = new Tuple<int, int, int, int, int>(0, 0, 0, 0, 0);
         }
+
+        public bool IsGreaterThan(int maj, int min, int rev) => Major > maj || (Major == maj && Minor > min) || (Major == maj && Minor == min && Revision > rev);
+        public bool IsGreaterOrEqualTo(int maj, int min, int rev) => Major > maj || (Major == maj && Minor > min) || (Major == maj && Minor == min && Revision >= rev);
 
         public string GetDisplayName()
         {
@@ -176,16 +190,17 @@ namespace InventorLoaderCs
         public VersionInfo Version { get; set; }
         public int Value2 { get; set; }
         public List<RSeSegmentObject> Objects { get; set; }
-        public List<DataNode> Nodes { get; set; } // Assuming DataNode will be defined
+        public List<SecNode> Nodes { get; set; } // Changed from DataNode to SecNode for SegmentReader compatibility
 
-        public RSeSegment()
+        public RSeSegment(string name = "", VersionInfo version = null)
         {
-            Name = string.Empty;
+            Name = name;
             Type = string.Empty;
+            Version = version ?? new VersionInfo();
             Arr1 = new List<object>();
             Arr2 = new List<object>();
             Objects = new List<RSeSegmentObject>();
-            Nodes = new List<DataNode>();
+            Nodes = new List<SecNode>(); // Initialize SecNode list
         }
 
         public override string ToString()
@@ -419,5 +434,326 @@ namespace InventorLoaderCs
         public double GetRAD() => X;
         public double GetGRAD() => X * (180.0 / System.Math.PI); // Degrees
         public override string ToStandard() => $"{GetGRAD()}°";
+    }
+
+    // SecNode class moved from SegmentReaders.cs
+    public class SecNode
+    {
+        public string Uid { get; set; }
+        public byte[] FullDataBuffer { get; private set; }
+        public int Offset { get; private set; }
+        public int Size { get; private set; }
+        public int CurrentReadOffset { get; set; }
+
+        public Dictionary<string, object> ParsedContent { get; set; }
+
+        public SecNode(string uid, byte[] fullDataBuffer, int offset, int size)
+        {
+            Uid = uid;
+            FullDataBuffer = fullDataBuffer;
+            Offset = offset;
+            Size = size;
+            CurrentReadOffset = offset;
+            ParsedContent = new Dictionary<string, object>();
+        }
+
+        private bool CheckBounds(int requiredBytes, StreamWriter logFile, string fieldName, bool allowPartial = false)
+        {
+            if (CurrentReadOffset + requiredBytes > Offset + Size)
+            {
+                if (allowPartial && CurrentReadOffset <= Offset + Size) return true; // Allow reading up to end
+                string errorMsg = $"SecNode Read Error (UID: {Uid}, Field: {fieldName}): Not enough data. Required: {requiredBytes}, Available: {Offset + Size - CurrentReadOffset}";
+                logFile?.WriteLine($"Error reading {fieldName} for UID {Uid}: Not enough data. Attempting to read {requiredBytes} bytes at {CurrentReadOffset}, but only {Offset + Size - CurrentReadOffset} available.");
+                Logger.Error(errorMsg); // Using the Logger from ImporterUtils.cs
+                return false;
+            }
+            return true;
+        }
+
+        public void LogAction(StreamWriter logFile, string action) => logFile?.WriteLine($"  {action} (UID: {Uid}, Offset: {CurrentReadOffset})");
+
+
+        public void ReadHeader0(StreamWriter logFile = null)
+        {
+            LogAction(logFile, "Conceptual Read_Header0() called.");
+        }
+
+        public uint? ReadUInt32(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(uint), logFile, propertyName)) return null;
+            var (val, newOffset) = ImporterUtils.GetUInt32(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+            ParsedContent[propertyName] = val;
+            LogAction(logFile, $"Read {propertyName}: {val}");
+            return val;
+        }
+
+        public int? ReadSInt32(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(int), logFile, propertyName)) return null;
+            var (val, newOffset) = ImporterUtils.GetSInt32(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+            ParsedContent[propertyName] = val;
+            LogAction(logFile, $"Read {propertyName}: {val}");
+            return val;
+        }
+
+        public ushort[] ReadUInt16Array(string propertyName, int count, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(ushort) * count, logFile, propertyName)) return null;
+            ushort[] arr = new ushort[count];
+            for(int i=0; i<count; i++)
+            {
+                var(val, newOffset) = ImporterUtils.GetUInt16(FullDataBuffer, CurrentReadOffset);
+                arr[i] = val;
+                CurrentReadOffset = newOffset;
+            }
+            ParsedContent[propertyName] = arr;
+            LogAction(logFile, $"Read {propertyName}: [{string.Join(", ", arr)}]");
+            return arr;
+        }
+
+        public byte[] ReadBytes(string propertyName, int count, StreamWriter logFile)
+        {
+            if (!CheckBounds(count, logFile, propertyName)) return null;
+            byte[] bytes = new byte[count];
+            Array.Copy(FullDataBuffer, CurrentReadOffset, bytes, 0, count);
+            CurrentReadOffset += count;
+            ParsedContent[propertyName] = bytes;
+            LogAction(logFile, $"Read {propertyName}: {count} bytes");
+            return bytes;
+        }
+
+        public string ReadLen32Text16(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(uint), logFile, propertyName + "_length", allowPartial: true)) return null;
+            var (charCount, offsetAfterLength) = ImporterUtils.GetUInt32(FullDataBuffer, CurrentReadOffset);
+
+            int byteLength = (int)charCount * 2;
+            if (offsetAfterLength + byteLength > Offset + Size)
+            {
+                LogAction(logFile, $"Error reading {propertyName}: Not enough data for string content. Calculated byteLength {byteLength} at {offsetAfterLength}.");
+                CurrentReadOffset = offsetAfterLength;
+                return null;
+            }
+
+            var (val, newOffset) = ImporterUtils.GetLen32Text16(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+            ParsedContent[propertyName] = val;
+            LogAction(logFile, $"Read {propertyName}: {val}");
+            return val;
+        }
+
+        public Guid? ReadGuid(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(16, logFile, propertyName)) return null;
+            var (val, newOffset) = ImporterUtils.GetGuid(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+            ParsedContent[propertyName] = val;
+            LogAction(logFile, $"Read {propertyName}: {val}");
+            return val;
+        }
+
+        public ColorPlaceholder? ReadColorRgba(string propertyName, StreamWriter logFile) // Using ColorPlaceholder for now
+        {
+            if (!CheckBounds(sizeof(float) * 4, logFile, propertyName)) return null;
+            var (r, rOff) = ImporterUtils.GetFloat32(FullDataBuffer, CurrentReadOffset);
+            var (g, gOff) = ImporterUtils.GetFloat32(FullDataBuffer, rOff);
+            var (b, bOff) = ImporterUtils.GetFloat32(FullDataBuffer, gOff);
+            var (a, aOff) = ImporterUtils.GetFloat32(FullDataBuffer, bOff);
+            CurrentReadOffset = aOff;
+            var color = new ColorPlaceholder(r, g, b, a); // This needs ColorPlaceholder to be accessible
+            ParsedContent[propertyName] = color;
+            LogAction(logFile, $"Read {propertyName}: {color}");
+            return color;
+        }
+
+        public byte? ReadUInt8(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(byte), logFile, propertyName)) return null;
+            var (val, newOffset) = ImporterUtils.GetUInt8(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+            ParsedContent[propertyName] = val;
+            LogAction(logFile, $"Read {propertyName}: {val}");
+            return val;
+        }
+
+        public ushort? ReadUInt16(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(ushort), logFile, propertyName)) return null;
+            var (val, newOffset) = ImporterUtils.GetUInt16(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+            ParsedContent[propertyName] = val;
+            LogAction(logFile, $"Read {propertyName}: {val}");
+            return val;
+        }
+
+        public float[] ReadFloat32Array(string propertyName, int count, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(float) * count, logFile, propertyName)) return null;
+            float[] arr = new float[count];
+            for(int i=0; i<count; i++)
+            {
+                var(val, newOffset) = ImporterUtils.GetFloat32(FullDataBuffer, CurrentReadOffset);
+                arr[i] = val;
+                CurrentReadOffset = newOffset;
+            }
+            ParsedContent[propertyName] = arr;
+            LogAction(logFile, $"Read {propertyName}: float[{count}]");
+            return arr;
+        }
+
+        public double[] ReadFloat64Array(string propertyName, int count, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(double) * count, logFile, propertyName)) return null;
+            double[] arr = new double[count];
+            for(int i=0; i<count; i++)
+            {
+                var(val, newOffset) = ImporterUtils.GetFloat64(FullDataBuffer, CurrentReadOffset);
+                arr[i] = val;
+                CurrentReadOffset = newOffset;
+            }
+            ParsedContent[propertyName] = arr;
+            LogAction(logFile, $"Read {propertyName}: double[{count}]");
+            return arr;
+        }
+
+        public Vector2? ReadVector2D(string propertyName, StreamWriter logFile, bool useFloat32 = true)
+        {
+            if (useFloat32)
+            {
+                if (!CheckBounds(sizeof(float) * 2, logFile, propertyName)) return null;
+                var (x, xOff) = ImporterUtils.GetFloat32(FullDataBuffer, CurrentReadOffset);
+                var (y, yOff) = ImporterUtils.GetFloat32(FullDataBuffer, xOff);
+                CurrentReadOffset = yOff;
+                var vec = new Vector2(x,y);
+                ParsedContent[propertyName] = vec;
+                LogAction(logFile, $"Read {propertyName} (Vec2f): {vec}");
+                return vec;
+            }
+            else // Float64
+            {
+                if (!CheckBounds(sizeof(double) * 2, logFile, propertyName)) return null;
+                var (x, xOff) = ImporterUtils.GetFloat64(FullDataBuffer, CurrentReadOffset);
+                var (y, yOff) = ImporterUtils.GetFloat64(FullDataBuffer, xOff);
+                CurrentReadOffset = yOff;
+                var vec = new Vector2((float)x, (float)y); // Storing as float Vector2 for consistency
+                ParsedContent[propertyName] = vec;
+                LogAction(logFile, $"Read {propertyName} (Vec2d): {vec}");
+                return vec;
+            }
+        }
+
+        public Vector3? ReadVector3DFloat32(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(float) * 3, logFile, propertyName)) return null;
+            var (x, xOff) = ImporterUtils.GetFloat32(FullDataBuffer, CurrentReadOffset);
+            var (y, yOff) = ImporterUtils.GetFloat32(FullDataBuffer, xOff);
+            var (z, zOff) = ImporterUtils.GetFloat32(FullDataBuffer, yOff);
+            CurrentReadOffset = zOff;
+            var vec = new Vector3(x,y,z);
+            ParsedContent[propertyName] = vec;
+            LogAction(logFile, $"Read {propertyName} (Vec3f): {vec}");
+            return vec;
+        }
+
+        public Vector3? ReadVector3DFloat64(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(double) * 3, logFile, propertyName)) return null;
+            var (x, xOff) = ImporterUtils.GetFloat64(FullDataBuffer, CurrentReadOffset);
+            var (y, yOff) = ImporterUtils.GetFloat64(FullDataBuffer, xOff);
+            var (z, zOff) = ImporterUtils.GetFloat64(FullDataBuffer, yOff);
+            CurrentReadOffset = zOff;
+            var vec = new Vector3((float)x, (float)y, (float)z);  // Storing as float Vector3 for consistency
+            ParsedContent[propertyName] = vec;
+            LogAction(logFile, $"Read {propertyName} (Vec3d): {vec}");
+            return vec;
+        }
+
+        public double? ReadAngle(string propertyName, StreamWriter logFile) // Angles are often doubles (radians)
+        {
+            return ReadFloat64(propertyName, logFile);
+        }
+
+        public object ReadParentRef(string propertyName, StreamWriter logFile)
+        {
+            // This is a simplified version of ReadCrossRef for now
+            return ReadCrossRef(propertyName, logFile, "Parent");
+        }
+
+        public object ReadChildRef(string propertyName, StreamWriter logFile, int key = -1, string expectedType = null)
+        {
+            string actualPropName = key == -1 ? propertyName : $"{propertyName}[{key}]";
+            return ReadCrossRef(actualPropName, logFile, expectedType ?? "Child");
+        }
+
+        public object ReadMaterial(string propertyName, StreamWriter logFile)
+        {
+            LogAction(logFile, $"Conceptual ReadMaterial() for {propertyName} called.");
+            // Placeholder: Material structure is complex.
+            // Skip a conceptual number of bytes or read a placeholder string/ID.
+            int placeholderMatSize = 12; // Arbitrary
+            if (!CheckBounds(placeholderMatSize, logFile, propertyName)) return null;
+            CurrentReadOffset += placeholderMatSize;
+            string matPlaceholder = "Material_Placeholder";
+            ParsedContent[propertyName] = matPlaceholder;
+            return matPlaceholder;
+        }
+
+
+        public double? ReadFloat64(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(double), logFile, propertyName)) return null;
+            var (val, newOffset) = ImporterUtils.GetFloat64(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+            ParsedContent[propertyName] = val;
+            LogAction(logFile, $"Read {propertyName}: {val}");
+            return val;
+        }
+
+        public float? ReadFloat32(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(float), logFile, propertyName)) return null;
+            var (val, newOffset) = ImporterUtils.GetFloat32(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+            ParsedContent[propertyName] = val;
+            LogAction(logFile, $"Read {propertyName}: {val}");
+            return val;
+        }
+
+        public bool? ReadBoolean(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(byte), logFile, propertyName)) return null;
+            var (val, newOffset) = ImporterUtils.GetBoolean(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+            ParsedContent[propertyName] = val;
+            LogAction(logFile, $"Read {propertyName}: {val}");
+            return val;
+        }
+
+        public object ReadCrossRef(string propertyName, StreamWriter logFile, string expectedType = null)
+        {
+            LogAction(logFile, $"Conceptual ReadCrossRef() for {propertyName} (Expected: {expectedType ?? "any"}) called.");
+            int placeholderRefSize = 8;
+            if (!CheckBounds(placeholderRefSize, logFile, propertyName)) return null;
+            CurrentReadOffset += placeholderRefSize;
+            string refPlaceholder = $"CrossRef_To_{expectedType ?? "Object"}_ID_Placeholder";
+            ParsedContent[propertyName] = refPlaceholder;
+            return refPlaceholder;
+        }
+
+        public void SkipBytes(int count, StreamWriter logFile, string reason = "padding")
+        {
+            LogAction(logFile, $"Skipping {count} bytes for {reason}.");
+            if (!CheckBounds(count, logFile, $"SkipBytes for {reason}")) return;
+            CurrentReadOffset += count;
+        }
+
+        public bool IsEof(StreamWriter logFile = null)
+        {
+            bool eof = CurrentReadOffset >= (Offset + Size);
+            if (eof) LogAction(logFile, "EOF reached for this node.");
+            return eof;
+        }
     }
 }

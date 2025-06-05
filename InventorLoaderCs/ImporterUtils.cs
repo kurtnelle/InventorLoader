@@ -8,22 +8,14 @@ using System.Text;
 
 namespace InventorLoaderCs
 {
+    // Logger class moved from SegmentReaders.cs
     public static class Logger
     {
-        public static void Info(string message, params object[] args)
-        {
-            Console.WriteLine($"INFO: {string.Format(message, args)}");
-        }
+        public static StreamWriter LogWriter { get; set; }
 
-        public static void Warning(string message, params object[] args)
-        {
-            Console.WriteLine($"WARNING: {string.Format(message, args)}");
-        }
-
-        public static void Error(string message, params object[] args)
-        {
-            Console.WriteLine($"ERROR: {string.Format(message, args)}");
-        }
+        public static void Info(string message) { LogWriter?.WriteLine($"INFO: {message}"); Console.WriteLine($"INFO: {message}"); }
+        public static void Warning(string message) { LogWriter?.WriteLine($"WARNING: {message}"); Console.WriteLine($"WARNING: {message}"); }
+        public static void Error(string message) { LogWriter?.WriteLine($"ERROR: {message}"); Console.WriteLine($"ERROR: {message}"); }
     }
 
     public static class ImporterUtils
