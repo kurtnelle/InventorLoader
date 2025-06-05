@@ -458,6 +458,32 @@ namespace InventorLoaderCs
     {
         public DCReader(RSeSegment segment) : base(segment) { }
 
+        public override void ReadSegmentData(byte[] segmentData, StreamWriter logFile)
+        {
+            // Placeholder implementation
+            logFile?.WriteLine($"DCReader.ReadSegmentData called for segment {Segment?.Name}. Data length: {segmentData?.Length ?? -1} - placeholder implementation");
+            // Typically, this method would iterate through SecNodes if they exist for this segment type,
+            // or parse segmentData directly if it's a known flat structure.
+            if (Segment?.Nodes != null && Segment.Nodes.Any())
+            {
+                foreach (var node in Segment.Nodes)
+                {
+                    ReadBlock(node); // Uses SegmentReader.ReadBlock
+                }
+            }
+            else if (segmentData != null && segmentData.Length > 0)
+            {
+                // If there are no pre-scanned nodes, but there is data,
+                // this might indicate a segment type that isn't node-based
+                // or where node scanning failed/wasn't applicable.
+                logFile?.WriteLine($"DCReader.ReadSegmentData: Segment {Segment?.Name} has raw data but no SecNodes. Direct parsing not yet implemented for this reader.");
+            }
+            else
+            {
+                logFile?.WriteLine($"DCReader.ReadSegmentData: No data or nodes to process for segment {Segment?.Name}.");
+            }
+        }
+
         protected override void PopulateDataReaderMethods()
         {
             _dataReaderMethods["90874D16-11D0-D1F8-0008CABC0663DC09"] = Read_RDxPart;
@@ -635,11 +661,4 @@ namespace InventorLoaderCs
     public class RSeDbReader : SegmentReader { public RSeDbReader(RSeSegment s) : base(s) { } protected override void PopulateDataReaderMethods() { } public override void ReadSegmentData(byte[] d, StreamWriter l) { } }
     public class UFRxDocReader : SegmentReader { public UFRxDocReader(RSeSegment s) : base(s) { } protected override void PopulateDataReaderMethods() { } public override void ReadSegmentData(byte[] d, StreamWriter l) { } }
 
-    public static class Logger
-    {
-        public static StreamWriter LogWriter { get; set; }
-        public static void Info(string message) { LogWriter?.WriteLine($"INFO: {message}"); Console.WriteLine($"INFO: {message}"); }
-        public static void Warning(string message) { LogWriter?.WriteLine($"WARNING: {message}"); Console.WriteLine($"WARNING: {message}"); }
-        public static void Error(string message) { LogWriter?.WriteLine($"ERROR: {message}"); Console.WriteLine($"ERROR: {message}"); }
-    }
 }
