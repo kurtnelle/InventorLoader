@@ -35,6 +35,59 @@ namespace InventorLoaderCs
         public override string ToString() => $"R:{R} G:{G} B:{B} A:{A}";
     }
 
+    // Placeholder Enums for Parameter reading
+    public enum Tolerances
+    {
+        NOMINAL = 0, // Assign values based on Python or common usage
+        LOWER = 1,
+        UPPER = 2,
+        MEDIAN = 3
+    }
+
+    public enum Functions
+    {
+        // Values should match those in Python's importerConstants or Acis.py Functions Enum
+        NONE = 0, // Assuming 0 for empty string if that's the first in Python
+        COS = 1,
+        SIN = 2,
+        TAN = 3,
+        ACOS = 4,
+        ASIN = 5,
+        ATAN = 6,
+        COSH = 7,
+        SINH = 8,
+        TANH = 9,
+        SQRT = 10,
+        EXP = 11,
+        POW = 12,
+        LOG = 13, // Natural Log (ln)
+        LOG10 = 14, // Base 10 Log
+        FLOOR = 15,
+        CEIL = 16,
+        ROUND = 17,
+        ABS = 18,
+        SIGN = 19,
+        MAX = 20,
+        MIN = 21,
+        RANDOM = 22,
+        ACOSH = 23,
+        ASINH = 24,
+        ATANH = 25,
+        ISOLATE = 26
+        // Add all other functions from Python's Functions Enum
+    }
+
+    public enum PartFeatureOperationEnumPlaceholder
+    {
+        // These values should align with the actual enum values used in Inventor files.
+        // Using common STEP Booleans as placeholders.
+        OP_NEW_BODY = 0, // Or i nessuna operazione
+        OP_JOIN = 1,     // Union / Add
+        OP_CUT = 2,      // Difference / Remove
+        OP_INTERSECT = 3,// Common
+        OP_UNKNOWN = 99
+    }
+
     public class VersionInfo
     {
         public int Major { get; set; }
@@ -225,22 +278,103 @@ namespace InventorLoaderCs
 
     public class Inventor
     {
-        public object UFRxDoc { get; set; } // Type not specified
         public RSeDatabase RSeDb { get; set; }
+        public UFRxDocument UFRxDoc { get; set; } // Changed from object to UFRxDocument
         public RSeRevisions RSeRevisions { get; set; }
-        public Dictionary<string, object> IProperties { get; set; } // Assuming string keys, value type object
-        public Dictionary<Uid, RSeSegment> RSeMetaData { get; set; } // Assuming Uid keys
+        public Dictionary<string, object> IProperties { get; set; }
+        public Dictionary<string, RSeSegment> Segments { get; private set; }
 
         public Inventor()
         {
             RSeDb = new RSeDatabase();
+            UFRxDoc = new UFRxDocument(); // Initialize UFRxDoc
             RSeRevisions = new RSeRevisions();
             IProperties = new Dictionary<string, object>();
-            RSeMetaData = new Dictionary<Uid, RSeSegment>();
+            Segments = new Dictionary<string, RSeSegment>();
         }
 
-        // Methods like getApp, getBRep, etc., are deferred
+        // Methods like getApp, getBRep, etc., are deferred to use the Segments dictionary
     }
+
+    // New class for UFRxDoc segment data
+    public class UFRxDocument
+    {
+        public UFRxHeader1 Header1 { get; set; }
+        // Add other parts of UFRxDoc as needed
+        public UFRxDocument()
+        {
+            Header1 = new UFRxHeader1();
+        }
+    }
+
+    // New class for UFRxHeader1 data
+    public class UFRxHeader1
+    {
+        public int Schema { get; set; }
+        public int Magic1 { get; set; } // Usually 0x09072000
+        public int Magic2 { get; set; } // Usually 0x00000100
+        public string VersionString { get; set; } // e.g., "15.0.211200.0"
+        public VersionInfo ParsedVersion { get; set; }
+        public string FileName { get; set; }
+        public string SourceFileName { get; set; }
+        public DateTime CreationDate { get; set; }
+        public Guid DocGuid { get; set; }
+        public Guid VersionGuid { get; set; }
+        // Add other fields from UFRxHeader1 as needed
+    }
+
+    // New struct/class for segment directory entries
+    public class SegmentEntryInfo
+    {
+        public string Name { get; set; }
+        public string TypeString { get; set; } // Segment type as a string
+        public string UidString { get; set; }  // Segment UID as a string
+        public int OleStorageIndex { get; set; } // Or some other identifier for OLE stream
+
+        public SegmentEntryInfo(string name, string typeString, string uidString, int oleIdx = 0)
+        {
+            Name = name;
+            TypeString = typeString;
+            UidString = uidString;
+            OleStorageIndex = oleIdx;
+        }
+        public override string ToString() => $"Name: {Name}, Type: {TypeString}, UID: {UidString}";
+    }
+
+
+    public class RSeSegInformation
+    {
+        public string Text { get; set; }
+        public List<object> Vers { get; set; }
+        public object Date { get; set; }
+        public Uid? Uid { get; set; }
+        public List<object> Arr2 { get; set; }
+        public List<object> Arr3 { get; set; }
+        public ushort U16 { get; set; }
+        public string Text2 { get; set; }
+        public List<object> Arr4 { get; set; }
+        public Dictionary<object, object> Segments { get; set; }
+        public List<ushort> Val { get; set; }
+        public List<Uid> UidList1 { get; set; }
+        public List<Uid> UidList2 { get; set; }
+        public List<SegmentEntryInfo> SegmentDirectory { get; set; } // Added for RSeDbReader
+
+        public RSeSegInformation()
+        {
+            Text = string.Empty;
+            Vers = new List<object>();
+            Arr2 = new List<object>();
+            Arr3 = new List<object>();
+            Text2 = string.Empty;
+            Arr4 = new List<object>();
+            Segments = new Dictionary<object, object>();
+            Val = new List<ushort>();
+            UidList1 = new List<Uid>();
+            UidList2 = new List<Uid>();
+            SegmentDirectory = new List<SegmentEntryInfo>(); // Initialize
+        }
+    }
+
 
     public abstract class AbstractData
     {
@@ -461,10 +595,10 @@ namespace InventorLoaderCs
         {
             if (CurrentReadOffset + requiredBytes > Offset + Size)
             {
-                if (allowPartial && CurrentReadOffset <= Offset + Size) return true; // Allow reading up to end
+                if (allowPartial && CurrentReadOffset <= Offset + Size) return true;
                 string errorMsg = $"SecNode Read Error (UID: {Uid}, Field: {fieldName}): Not enough data. Required: {requiredBytes}, Available: {Offset + Size - CurrentReadOffset}";
-                logFile?.WriteLine($"Error reading {fieldName} for UID {Uid}: Not enough data. Attempting to read {requiredBytes} bytes at {CurrentReadOffset}, but only {Offset + Size - CurrentReadOffset} available.");
-                Logger.Error(errorMsg); // Using the Logger from ImporterUtils.cs
+                logFile?.WriteLine(errorMsg); // Log to passed stream writer
+                Logger.Error(errorMsg);
                 return false;
             }
             return true;
@@ -562,7 +696,7 @@ namespace InventorLoaderCs
             var (b, bOff) = ImporterUtils.GetFloat32(FullDataBuffer, gOff);
             var (a, aOff) = ImporterUtils.GetFloat32(FullDataBuffer, bOff);
             CurrentReadOffset = aOff;
-            var color = new ColorPlaceholder(r, g, b, a); // This needs ColorPlaceholder to be accessible
+            var color = new ColorPlaceholder(r, g, b, a);
             ParsedContent[propertyName] = color;
             LogAction(logFile, $"Read {propertyName}: {color}");
             return color;
@@ -690,14 +824,72 @@ namespace InventorLoaderCs
         public object ReadMaterial(string propertyName, StreamWriter logFile)
         {
             LogAction(logFile, $"Conceptual ReadMaterial() for {propertyName} called.");
-            // Placeholder: Material structure is complex.
-            // Skip a conceptual number of bytes or read a placeholder string/ID.
-            int placeholderMatSize = 12; // Arbitrary
+            int placeholderMatSize = 12;
             if (!CheckBounds(placeholderMatSize, logFile, propertyName)) return null;
             CurrentReadOffset += placeholderMatSize;
             string matPlaceholder = "Material_Placeholder";
             ParsedContent[propertyName] = matPlaceholder;
             return matPlaceholder;
+        }
+
+        public T? ReadEnum16<T>(string propertyName, StreamWriter logFile) where T : struct, Enum
+        {
+            if (!CheckBounds(sizeof(ushort), logFile, propertyName)) return null;
+            var (val, newOffset) = ImporterUtils.GetUInt16(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+
+            // Attempt to convert to the specific enum type T
+            // This assumes the enum's underlying type is compatible with int after ushort conversion.
+            if (Enum.IsDefined(typeof(T), Convert.ChangeType(val, Enum.GetUnderlyingType(typeof(T)))))
+            {
+                T enumVal = (T)Enum.ToObject(typeof(T), val);
+                ParsedContent[propertyName] = enumVal;
+                LogAction(logFile, $"Read Enum {propertyName} ({typeof(T).Name}): {enumVal} (raw: {val})");
+                return enumVal;
+            }
+            else
+            {
+                LogAction(logFile, $"Warning: Raw value {val} is not defined for Enum {typeof(T).Name} for property {propertyName}. Storing raw value.");
+                ParsedContent[propertyName] = val; // Store raw value if not defined
+                return null;
+            }
+        }
+
+        public short? ReadSInt16(string propertyName, StreamWriter logFile)
+        {
+            if (!CheckBounds(sizeof(short), logFile, propertyName)) return null;
+            var (val, newOffset) = ImporterUtils.GetSInt16(FullDataBuffer, CurrentReadOffset);
+            CurrentReadOffset = newOffset;
+            ParsedContent[propertyName] = val;
+            LogAction(logFile, $"Read {propertyName}: {val}");
+            return val;
+        }
+
+        public List<object> ReadChildRefList(string propertyName, StreamWriter logFile)
+        {
+            LogAction(logFile, $"Reading ChildRefList for {propertyName}");
+            var list = new List<object>();
+            uint? count = ReadUInt32($"{propertyName}_count", logFile);
+            if (!count.HasValue)
+            {
+                LogAction(logFile, $"Error: Could not read count for list {propertyName}.");
+                return list; // Return empty list
+            }
+
+            for (int i = 0; i < count.Value; i++)
+            {
+                object childRef = ReadChildRef($"{propertyName}_{i}", logFile);
+                if (childRef != null)
+                {
+                    list.Add(childRef);
+                }
+                else
+                {
+                    LogAction(logFile, $"Warning: Failed to read child ref {i} for list {propertyName}.");
+                }
+            }
+            ParsedContent[propertyName] = list;
+            return list;
         }
 
 
