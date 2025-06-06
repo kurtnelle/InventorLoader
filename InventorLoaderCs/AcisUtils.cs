@@ -2,6 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 
+using System.Text; // Added for Encoding
+using System.IO; // Added for BinaryReader, IOException
+
+
 namespace InventorLoaderCs
 {
     public static class AcisConstants
@@ -29,6 +33,7 @@ namespace InventorLoaderCs
         public const int TAG_VECTOR_2D = 22;
         public const int TAG_INT64 = 23;
     }
+
 
     public static class AcisGlobalUtils
     {
@@ -281,6 +286,7 @@ namespace InventorLoaderCs
         }
     }
 
+
     // Static dictionaries for enum string to value mapping (populated as needed)
     // These mimic the dictionaries like SENSE, ROTATION in Acis.py
     public static class AcisEnums
@@ -298,6 +304,7 @@ namespace InventorLoaderCs
         public static readonly Dictionary<string, bool> BOOLEAN_TEXT_MAP = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
             {{".T.", true}, {"T", true}, {".F.", false}, {"F", false}};
     }
+
 
     // Placeholder for UnknownAcisEntity if not defined in AcisEntities.cs
     public class UnknownAcisEntity : AcisEntity
@@ -355,6 +362,7 @@ namespace InventorLoaderCs
     }
 
 
+
     public class BS_Curve
     {
         public List<Vector3> Poles { get; set; } // For 3D, or Vector2 for 2D
@@ -401,6 +409,7 @@ namespace InventorLoaderCs
             VDegree = vDegree;
         }
     }
+
 
     public class Helix
     {

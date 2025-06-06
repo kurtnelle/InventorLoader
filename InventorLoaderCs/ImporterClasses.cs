@@ -474,6 +474,7 @@ namespace InventorLoaderCs
     }
 
 
+
     public class RSeSegInformation
     {
         public string Text { get; set; }
@@ -506,6 +507,7 @@ namespace InventorLoaderCs
             SegmentDirectory = new List<SegmentEntryInfo>(); // Initialize
         }
     }
+
 
 
     public abstract class AbstractData
