@@ -94,6 +94,7 @@ namespace InventorLoaderCs
         protected StepNamedEntity(string name = "") : base() { Name = name; }
         public override List<object> GetParameters() => new List<object> { Name };
 
+
         public override string GetClassName()
         {
             // This is a base implementation.
@@ -103,6 +104,7 @@ namespace InventorLoaderCs
             // Returning the C# class name uppercase is a fallback.
             return GetType().Name.ToUpperInvariant();
         }
+
     }
 
     // --- Core Geometric and Topological STEP Entities ---
@@ -1223,6 +1225,7 @@ namespace InventorLoaderCs
         public static CartesianPoint CreateCartesianPoint(Vector3 vec, string name = "", bool useCache = true)
         {
             /*
+
             string key = $"CP_{vec.X:F8}_{vec.Y:F8}_{vec.Z:F8}"; // Increased precision for cache key
             if (useCache && _cartesianPoints.TryGetValue(key, out CartesianPoint cp))
             {
@@ -1231,13 +1234,17 @@ namespace InventorLoaderCs
             cp = new CartesianPoint(name, vec.X, vec.Y, vec.Z);
             if (useCache) _cartesianPoints[key] = cp;
             return cp;
+
             */
             throw new NotImplementedException();
+
         }
 
         public static Direction CreateDirection(Vector3 vec, string name = "", bool useCache = true)
         {
+
             /*
+
             var normalizedVec = vec.LengthSquared() > 1e-12f ? Vector3.Normalize(vec) : vec; // Avoid normalizing zero vector
             string key = $"DIR_{normalizedVec.X:F8}_{normalizedVec.Y:F8}_{normalizedVec.Z:F8}";
             if (useCache && _directions.TryGetValue(key, out Direction dir))
@@ -1247,13 +1254,17 @@ namespace InventorLoaderCs
             dir = new Direction(name, normalizedVec.X, normalizedVec.Y, normalizedVec.Z);
             if (useCache) _directions[key] = dir;
             return dir;
+
+
             */
             throw new NotImplementedException();
         }
 
         public static Vector CreateVector(Direction orientation, double magnitude, string name = "", bool useCache = true)
         {
+
             /*
+
             string key = $"VEC_{orientation.Id}_{magnitude:F8}";
             if (useCache && !_vectors.TryGetValue(key, out var vec))
             {
@@ -1263,8 +1274,10 @@ namespace InventorLoaderCs
             }
             // Fallback for no cache hit or if not using cache
             return _vectors.TryGetValue(key, out var cachedVec) ? cachedVec : new Vector(name, orientation, magnitude);
+
             */
             throw new NotImplementedException();
+
         }
 
         public static Line CreateLine(AcisCurveStraight acisLine, string name = "", bool useCache = true)
@@ -1290,7 +1303,9 @@ namespace InventorLoaderCs
 
         public static VertexPoint CreateVertexPoint(AcisVertex acisVertex, string name = "", bool useCache = true)
         {
+
             /*
+
             if (acisVertex?.PointEntity == null) return null; // Or throw/log
             var cp = CreateCartesianPoint(acisVertex.PointEntity.Position, name + "_geom", useCache);
             string key = $"VP_{cp.Id}";
@@ -1301,13 +1316,17 @@ namespace InventorLoaderCs
             vp = new VertexPoint(name, cp);
             if (useCache) _vertexPoints[key] = vp;
             return vp;
+
             */
             throw new NotImplementedException();
+
         }
 
         public static EdgeCurve CreateEdgeCurve(AcisEdge acisEdge, string name = "", bool useCache = true)
         {
+
             /*
+
             if (acisEdge == null) return null;
             var startVp = CreateVertexPoint(acisEdge.StartVertex, name + "_start_v", useCache);
             var endVp = CreateVertexPoint(acisEdge.EndVertex, name + "_end_v", useCache);
@@ -1351,6 +1370,7 @@ namespace InventorLoaderCs
                 }
             }
             return stepEdgeCurve;
+
             */
             throw new NotImplementedException();
         }
@@ -1415,7 +1435,9 @@ namespace InventorLoaderCs
 
         public static Axis2Placement3D CreateAxis2Placement3D(Vector3 location, Vector3 axis, Vector3 refDir, string name = "", bool useCache = true)
         {
+
             /*
+
             var locPt = CreateCartesianPoint(location, name + "_loc", useCache);
             var axisDir = CreateDirection(axis, name + "_axis", useCache);
             var refDirection = CreateDirection(refDir, name + "_refdir", useCache);
@@ -1427,8 +1449,10 @@ namespace InventorLoaderCs
             a2p3d = new Axis2Placement3D(name, locPt, axisDir, refDirection);
             if (useCache) _axis2Placements[key] = a2p3d;
             return a2p3d;
+
             */
             throw new NotImplementedException();
+
         }
 
         public static Plane CreatePlane(AcisSurfacePlane acisPlane, string name = "", bool useCache = true)
@@ -1695,6 +1719,22 @@ namespace InventorLoaderCs
             }
         }
 
+
+        public static Axis2Placement3D CreateAxis2Placement3D(Vector3 location, Vector3 axis, Vector3 refDir, string name = "", bool useCache = true)
+        {
+            var locPt = CreateCartesianPoint(location);
+            var axisDir = CreateDirection(axis);
+            var refDirection = CreateDirection(refDir);
+            string key = $"{locPt}_{axisDir}_{refDirection}_{name}";
+            if (!_axis2Placements.TryGetValue(key, out var a2p3d))
+            {
+                a2p3d = new Axis2Placement3D(name, locPt, axisDir, refDirection);
+                _axis2Placements[key] = a2p3d;
+            }
+            return a2p3d;
+        }
+
+
         public static Plane CreatePlane(Axis2Placement3D position, string name = "")
         {
             string key = $"{position}_{name}";
@@ -1811,7 +1851,9 @@ namespace InventorLoaderCs
         // Overload for creating Axis2Placement3D from a Matrix4x4
         public static Axis2Placement3D CreateAxis2Placement3D(Matrix4x4 matrix, string name = "", bool useCache = true)
         {
+
             /*
+
             Vector3 location = matrix.Translation;
 
             // Extract rotation part of the matrix to transform direction vectors
@@ -1840,8 +1882,10 @@ namespace InventorLoaderCs
 
 
             return CreateAxis2Placement3D(location, Vector3.Normalize(zAxis), Vector3.Normalize(xAxis), name, useCache);
+
             */
             throw new NotImplementedException();
+
         }
 
         // --- Factory Methods for Product Definition Entities ---
