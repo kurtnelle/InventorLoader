@@ -8,12 +8,6 @@
 <icon>Icon.png</icon>
 <url type="bugtracker">https://github.com/jmplonka/InventorLoader/issues</url>
 <url type="repository" branch="master">https://github.com/jmplonka/InventorLoader</url>
-<content>
-	<workbench>
-		<classname>InventorWorkbench</classname>
-		<subdirectory>./</subdirectory>
-	</workbench>
-</content>
 <tag>Autodesk</tag>
 <tag>Inventor</tag>
 <tag>IPT</tag>
@@ -27,9 +21,4 @@
 <depend>Draft</depend>
 <depend>Sketcher</depend>
 <depend>SheetMetal Workbench</depend>
-<depend>olefile</depend>
-<depend>xlrd</depend>
-<depend>xlwt</depend>
-<depend>xlutils</depend>
-<depend>ezdxf</depend>
 </package>
