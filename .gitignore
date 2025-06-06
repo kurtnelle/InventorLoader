@@ -1,5 +1,3 @@
-*.pyc
-/libs
 *.log
 ._*
 _.png
